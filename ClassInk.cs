@@ -19,8 +19,8 @@ using Microsoft.Win32;
 
 [assembly: System.Reflection.AssemblyTitle("课堂笔 ClassInk")]
 [assembly: System.Reflection.AssemblyProduct("ClassInk")]
-[assembly: System.Reflection.AssemblyVersion("1.0.0.0")]
-[assembly: System.Reflection.AssemblyFileVersion("1.0.0.0")]
+[assembly: System.Reflection.AssemblyVersion("1.2.0.0")]
+[assembly: System.Reflection.AssemblyFileVersion("1.2.0.0")]
 
 namespace ClassInk {
  public sealed class ToolIcon : FrameworkElement {
@@ -58,9 +58,14 @@ namespace ClassInk {
      if(name!="board")dc.DrawRectangle(new SolidColorBrush(name=="greenboard"?Colors.SeaGreen:Colors.Black),null,new Rect(3,4,14,11));
      path="M3,4 L17,4 17,15 3,15 Z M10,15 L10,18 M6,18 L14,18";break;
     case "screen":path="M3,8 L3,4 7,4 M13,4 L17,4 17,8 M17,12 L17,16 13,16 M7,16 L3,16 3,12 M8,8 L13,11 10,12 9,14 Z";break;
+    case "pages":path="M6,3 L16,3 16,15 6,15 Z M4,6 L4,17 13,17";break;
+    case "eye":case "eyeoff":
+     path="M2,10 Q10,1 18,10 Q10,19 2,10 Z M12,10 A2,2 0 1 1 8,10 A2,2 0 1 1 12,10"+(name=="eyeoff"?" M3,3 L17,17":"");break;
     case "save":path="M4,3 L14,3 17,6 17,17 3,17 3,3 Z M7,3 L7,8 13,8 13,3 M6,17 L6,12 14,12 14,17";break;
     case "open":path="M3,7 L3,4 8,4 10,7 17,7 M3,7 L17,7 15,17 3,17 Z";break;
     case "export":path="M4,12 L4,17 16,17 16,12 M10,3 L10,13 M6,7 L10,3 14,7";break;
+    case "image":path="M3,4 L17,4 17,16 3,16 Z M3,14 L8,9 12,13 14,11 17,14 M14,7 L14.1,7";break;
+    case "pdf":path="M5,2 L12,2 16,6 16,18 5,18 Z M12,2 L12,6 16,6 M8,10 L13,10 M8,14 L13,14";break;
     case "exit":path="M8,4 L3,4 3,17 8,17 M8,10 L18,10 M14,6 L18,10 14,14";break;
     case "settings":path="M8,3 L12,3 13,5 16,5 18,8 17,10 18,12 16,15 13,15 12,17 8,17 7,15 4,15 2,12 3,10 2,8 4,5 7,5 Z M13,10 A3,3 0 1 1 7,10 A3,3 0 1 1 13,10";break;
    }
@@ -70,7 +75,11 @@ namespace ClassInk {
  }
  public static class Program {
   [STAThread] public static void Main(string[] args) {
-   if(args.Contains("--self-test")) { SelfTest.Run(); return; }
+   if(args.Contains("--self-test")) {
+    try{SelfTest.Run();}
+    catch(Exception error){File.AppendAllText(Path.Combine(AppDomain.CurrentDomain.BaseDirectory,"self-test.txt"),Environment.NewLine+error);Environment.ExitCode=1;}
+    return;
+   }
    bool first;using(var instance=new System.Threading.Mutex(true,"Local\\ClassInk.Desktop.Singleton",out first)){
    if(!first)return;
    // Older releases predate the mutex. Do not create another orb alongside them.
@@ -125,6 +134,35 @@ namespace ClassInk {
    }
   }
  }
+ sealed class MouseInkStroke {
+  Point lastInput, lastOutput;
+  public readonly Stroke InkStroke;
+  public MouseInkStroke(Point start,DrawingAttributes attributes){
+   lastInput=lastOutput=start;
+   var points=new StylusPointCollection{new StylusPoint(start.X,start.Y)};
+   var drawing=attributes.Clone();drawing.FitToCurve=false;
+   InkStroke=new Stroke(points,drawing);
+  }
+  public void Append(Point point){
+   if((point-lastInput).LengthSquared<0.64)return;
+   var movement=point-lastInput;
+   var smoothedEnd=point-movement*Math.Min(0.5,3/movement.Length);
+   int segments=Math.Min(20,Math.Max(1,(int)Math.Ceiling(((lastInput-lastOutput).Length+(smoothedEnd-lastInput).Length)/4)));
+   var batch=new StylusPointCollection(segments);
+   for(int step=1;step<=segments;step++){
+    double t=(double)step/segments,u=1-t;
+    batch.Add(new StylusPoint(u*u*lastOutput.X+2*u*t*lastInput.X+t*t*smoothedEnd.X,
+     u*u*lastOutput.Y+2*u*t*lastInput.Y+t*t*smoothedEnd.Y));
+   }
+   InkStroke.StylusPoints.Add(batch);
+   lastInput=point;lastOutput=smoothedEnd;
+  }
+  public void Complete(Point? endpoint){
+   if(endpoint.HasValue)Append(endpoint.Value);
+   var end=endpoint??lastInput;
+   if((end-lastOutput).LengthSquared>0.0001)InkStroke.StylusPoints.Add(new StylusPoint(end.X,end.Y));
+  }
+ }
  public sealed class Board : Window {
   public InkCanvas Ink = new InkCanvas();
   readonly LaserRipples laser=new LaserRipples();
@@ -133,11 +171,19 @@ namespace ClassInk {
   public double Size=4;
   public bool White;
   public Action Changed = delegate {};
-  Point start; Stroke preview; bool drawing; string before;
+  Point start; Stroke preview; bool drawing;
+  MouseInkStroke mouseInk;
   TextBox editor;
   Point textPosition;
   double textResizeScale=1;
   public string Surface {get;private set;}
+  public bool AnnotationsHidden {get{return Ink.Opacity==0;}}
+  public void SetAnnotationsHidden(bool hidden){Ink.Opacity=hidden?0:1;}
+  public void FinishActiveInput(){
+   if(mouseInk!=null)FinishMouseInk();
+   if(drawing)Finish();
+   FinishText();
+  }
   static readonly Brush chalkboard=CreateChalkboard();
   public Board() {
    Surface="screen";
@@ -149,7 +195,7 @@ namespace ClassInk {
    Ink.Background=new SolidColorBrush(System.Windows.Media.Color.FromArgb(1,0,0,0));
    var layers=new Grid();layers.Children.Add(Ink);layers.Children.Add(laser);Content=layers;
    Ink.PreviewMouseLeftButtonDown+=Down; Ink.PreviewMouseMove+=Move; Ink.PreviewMouseLeftButtonUp+=Up;
-   Ink.LostMouseCapture+=(s,e)=>{if(drawing)Finish();};
+   Ink.LostMouseCapture+=(s,e)=>{if(mouseInk!=null)FinishMouseInk();if(drawing)Finish();};
    Ink.MouseEnter+=(s,e)=>{if(Tool=="laser")laser.Move(e.GetPosition(Ink));};
    Ink.MouseLeave+=(s,e)=>laser.End();
    Ink.SelectionMoved+=(s,e)=>Changed();
@@ -173,9 +219,11 @@ namespace ClassInk {
   }
   public void ApplyPen() { Ink.DefaultDrawingAttributes=new DrawingAttributes { Color=Color, Width=Size, Height=Size, FitToCurve=true, IsHighlighter=Tool=="highlight" }; }
   public void SetTool(string tool) {
+   if(mouseInk!=null)FinishMouseInk();
    if(Tool=="laser"&&tool!="laser")laser.Clear();
    FinishText();
    Tool=tool; ApplyPen();
+   if(tool!="mouse")SetAnnotationsHidden(false);
    Ink.EditingMode=tool=="pen"||tool=="highlight"?InkCanvasEditingMode.Ink:tool=="erase"?InkCanvasEditingMode.EraseByStroke:tool=="select"?InkCanvasEditingMode.Select:InkCanvasEditingMode.None;
    var h=new WindowInteropHelper(this).Handle;
    int style=Native.GetWindowLong(h,-20); Native.SetWindowLong(h,-20,tool=="mouse"?style|0x20|0x8000000:style&~0x20&~0x8000000);
@@ -187,16 +235,34 @@ namespace ClassInk {
    if(Tool=="laser"){laser.Click(e.GetPosition(Ink));e.Handled=true;return;}
    if(editor!=null){if(editor.IsMouseOver)return;FinishText(true,true);e.Handled=true;return;}
    FinishText();
-   before=Document.Save(this);
+   if(e.StylusDevice==null&&(Tool=="pen"||Tool=="highlight")&&Ink.CaptureMouse()){
+    mouseInk=new MouseInkStroke(e.GetPosition(Ink),Ink.DefaultDrawingAttributes);
+    Ink.Strokes.Add(mouseInk.InkStroke);e.Handled=true;return;
+   }
    if(Tool=="text") { e.Handled=true;BeginText(e.GetPosition(Ink));return; }
    if(Tool=="line"||Tool=="arrow"||Tool=="rect"||Tool=="ellipse") { start=e.GetPosition(Ink); drawing=true; Ink.CaptureMouse(); e.Handled=true; }
   }
   void Move(object s,MouseEventArgs e) {
+   if(mouseInk!=null){
+    var position=e.GetPosition(Ink);
+    if(e.LeftButton==MouseButtonState.Pressed)mouseInk.Append(position);else FinishMouseInk(position);
+    e.Handled=true;return;
+   }
    if(Tool=="laser"){laser.Move(e.GetPosition(Ink));return;}
    if(!drawing) return; if(preview!=null) Ink.Strokes.Remove(preview);
    preview=Shape(Tool,start,e.GetPosition(Ink),Color,Size); Ink.Strokes.Add(preview);
   }
-  void Up(object s,MouseButtonEventArgs e) { if(Tool=="laser"){e.Handled=true;return;} if(drawing) { Move(s,e); Finish(); e.Handled=true; } else if(before!=Document.Save(this)) Changed(); }
+  void Up(object s,MouseButtonEventArgs e) {
+   if(mouseInk!=null){FinishMouseInk(e.GetPosition(Ink));e.Handled=true;return;}
+   if(Tool=="laser"){e.Handled=true;return;}
+   if(drawing){Move(s,e);Finish();e.Handled=true;}
+  }
+  void FinishMouseInk(Point? endpoint=null){
+   var stroke=mouseInk;mouseInk=null;
+   stroke.Complete(endpoint);
+   if(Ink.IsMouseCaptured)Ink.ReleaseMouseCapture();
+   Changed();
+  }
   void Finish() { drawing=false; preview=null; Ink.ReleaseMouseCapture(); Changed(); }
   public static Stroke Shape(string kind,Point a,Point b,Color color,double size) {
    var pts=new StylusPointCollection(); Action<double,double> add=(x,y)=>pts.Add(new StylusPoint(x,y));
@@ -252,20 +318,102 @@ namespace ClassInk {
   }
  }
  public static class Document {
-  public static string Save(Board b) {
+  public static string Save(Board b,bool blank=false) {
    var doc=new XmlDocument(); var root=doc.CreateElement("ClassInk"); root.SetAttribute("version","1");root.SetAttribute("white",b.White.ToString());root.SetAttribute("surface",b.Surface);doc.AppendChild(root);
-   var ink=doc.CreateElement("Strokes"); using(var ms=new MemoryStream()) { b.Ink.Strokes.Save(ms);ink.InnerText=Convert.ToBase64String(ms.ToArray()); }root.AppendChild(ink);
-   foreach(TextBlock t in b.Ink.Children.OfType<TextBlock>()) { var n=doc.CreateElement("Text");n.SetAttribute("x",InkCanvas.GetLeft(t).ToString(CultureInfo.InvariantCulture));n.SetAttribute("y",InkCanvas.GetTop(t).ToString(CultureInfo.InvariantCulture));n.SetAttribute("size",t.FontSize.ToString(CultureInfo.InvariantCulture));n.SetAttribute("color",t.Foreground.ToString());n.InnerText=t.Text;root.AppendChild(n); }
+   var ink=doc.CreateElement("Strokes"); using(var ms=new MemoryStream()) { (blank?new StrokeCollection():b.Ink.Strokes).Save(ms);ink.InnerText=Convert.ToBase64String(ms.ToArray()); }root.AppendChild(ink);
+   if(!blank)foreach(TextBlock t in b.Ink.Children.OfType<TextBlock>()) { var n=doc.CreateElement("Text");n.SetAttribute("x",InkCanvas.GetLeft(t).ToString(CultureInfo.InvariantCulture));n.SetAttribute("y",InkCanvas.GetTop(t).ToString(CultureInfo.InvariantCulture));n.SetAttribute("size",t.FontSize.ToString(CultureInfo.InvariantCulture));n.SetAttribute("color",t.Foreground.ToString());n.InnerText=t.Text;root.AppendChild(n); }
    return doc.OuterXml;
   }
-  public static void Load(Board b,string xml) {
-   var doc=new XmlDocument { XmlResolver=null }; using(var reader=XmlReader.Create(new StringReader(xml),new XmlReaderSettings { DtdProcessing=DtdProcessing.Prohibit, MaxCharactersInDocument=20000000, XmlResolver=null })) doc.Load(reader);
-   var root=doc.DocumentElement; if(root.Name!="ClassInk"||root.GetAttribute("version")!="1") throw new InvalidDataException("不是支持的课堂笔文件。");
+  internal static XmlElement ReadRoot(string xml){
+   var doc=new XmlDocument { XmlResolver=null }; using(var reader=XmlReader.Create(new StringReader(xml),new XmlReaderSettings { DtdProcessing=DtdProcessing.Prohibit, MaxCharactersInDocument=80000000, XmlResolver=null })) doc.Load(reader);
+   return doc.DocumentElement;
+  }
+  public static void Load(Board b,string xml){LoadPage(b,ReadRoot(xml));}
+  internal static void LoadPage(Board b,XmlElement root){
+   if(root.Name!="ClassInk"||root.GetAttribute("version")!="1"||root["Strokes"]==null)throw new InvalidDataException("不是支持的课堂笔文件。");
    StrokeCollection strokes; using(var ms=new MemoryStream(Convert.FromBase64String(root["Strokes"].InnerText))) strokes=new StrokeCollection(ms);
    var texts=new List<Tuple<string,double,double,string,double>>();
    foreach(XmlElement n in root.SelectNodes("Text")) { double x=Double.Parse(n.GetAttribute("x"),CultureInfo.InvariantCulture),y=Double.Parse(n.GetAttribute("y"),CultureInfo.InvariantCulture),size=Double.Parse(n.GetAttribute("size"),CultureInfo.InvariantCulture); if(Double.IsNaN(x)||Double.IsInfinity(x)||Double.IsNaN(y)||Double.IsInfinity(y)||size<1||size>500||Double.IsNaN(size)) throw new InvalidDataException("文字数据无效。"); new BrushConverter().ConvertFromString(n.GetAttribute("color")); texts.Add(Tuple.Create(n.InnerText,x,y,n.GetAttribute("color"),size)); }
-   b.FinishText(false);b.Ink.Strokes=strokes; b.Ink.Children.Clear();foreach(var t in texts)b.AddText(t.Item1,t.Item2,t.Item3,t.Item4,t.Item5);
+   if(b==null)return;
+   b.FinishText(false);b.Ink.Select(new UIElement[0]);b.Ink.Strokes=strokes; b.Ink.Children.Clear();foreach(var t in texts)b.AddText(t.Item1,t.Item2,t.Item3,t.Item4,t.Item5);
    if(root.HasAttribute("surface"))b.SetSurface(root.GetAttribute("surface"));else b.SetWhite(root.GetAttribute("white")=="True");
+  }
+ }
+ sealed class LessonDocument {
+  public readonly string[] Pages;
+  public readonly int ActivePage;
+  public readonly string[] Titles;
+  public LessonDocument(string[] pages,int activePage,string[] titles=null){Pages=pages;ActivePage=activePage;Titles=titles??pages.Select(page=>"").ToArray();}
+  public string Save(){
+   var xml=new System.Text.StringBuilder();
+   xml.Append("<ClassInkLesson version=\"1\" active=\"").Append(ActivePage.ToString(CultureInfo.InvariantCulture)).Append("\">");
+   for(int i=0;i<Pages.Length;i++){
+    if(String.IsNullOrEmpty(Titles[i])){xml.Append(Pages[i]);continue;}
+    var page=Document.ReadRoot(Pages[i]);page.SetAttribute("title",Titles[i]);xml.Append(page.OuterXml);
+   }
+   return xml.Append("</ClassInkLesson>").ToString();
+  }
+  public static LessonDocument Load(string xml){
+   var root=Document.ReadRoot(xml);
+   if(root.Name=="ClassInk"){
+    Document.LoadPage(null,root);
+    return new LessonDocument(new[]{root.OuterXml},0);
+   }
+   int active;
+   var pages=root.ChildNodes.OfType<XmlElement>().ToArray();
+   if(root.Name!="ClassInkLesson"||root.GetAttribute("version")!="1"||!Int32.TryParse(root.GetAttribute("active"),out active)||active<0||active>=pages.Length)
+    throw new InvalidDataException("不是支持的课堂笔课程文件。");
+   var titles=new string[pages.Length];
+   for(int i=0;i<pages.Length;i++){
+    Document.LoadPage(null,pages[i]);titles[i]=pages[i].GetAttribute("title");pages[i].RemoveAttribute("title");
+   }
+   return new LessonDocument(pages.Select(page=>page.OuterXml).ToArray(),active,titles);
+  }
+ }
+ sealed class BoardExporter : IDisposable {
+  readonly Board board=new Board();
+  public BitmapSource Render(string snapshot,int maxWidth,int maxHeight,bool whiteBackground){
+   Document.Load(board,snapshot);
+   double width=board.Width,height=board.Height;
+   double scale=Math.Min(1,Math.Min(maxWidth/width,maxHeight/height));
+   int pixelWidth=Math.Max(1,(int)Math.Round(width*scale));
+   int pixelHeight=Math.Max(1,(int)Math.Round(height*scale));
+   if(board.Surface=="screen")board.Ink.Background=whiteBackground?Brushes.White:Brushes.Transparent;
+   board.Ink.Measure(new Size(width,height));board.Ink.Arrange(new Rect(0,0,width,height));board.Ink.UpdateLayout();
+   var scene=new DrawingVisual();
+   using(var dc=scene.RenderOpen())dc.DrawRectangle(new VisualBrush(board.Ink){Stretch=Stretch.Fill},null,new Rect(0,0,pixelWidth,pixelHeight));
+   var bitmap=new RenderTargetBitmap(pixelWidth,pixelHeight,96,96,PixelFormats.Pbgra32);
+   bitmap.Render(scene);bitmap.Freeze();return bitmap;
+  }
+  public void Dispose(){board.Close();}
+  public void WritePdf(Stream output,LessonDocument lesson){
+   var offsets=new List<long>{0};
+   Action<string> write=value=>{var bytes=System.Text.Encoding.ASCII.GetBytes(value);output.Write(bytes,0,bytes.Length);};
+   Action<int,string> obj=(id,body)=>{offsets.Add(output.Position);write(id+" 0 obj\n"+body+"\nendobj\n");};
+   write("%PDF-1.4\n");
+   obj(1,"<< /Type /Catalog /Pages 2 0 R >>");
+   string children=String.Join(" ",Enumerable.Range(0,lesson.Pages.Length).Select(i=>(4+i*3)+" 0 R"));
+   obj(2,"<< /Type /Pages /Count "+lesson.Pages.Length+" /Kids ["+children+"] >>");
+   obj(3,"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>");
+   for(int i=0;i<lesson.Pages.Length;i++){
+    var bitmap=Render(lesson.Pages[i],1600,1100,true);
+    var encoder=new JpegBitmapEncoder{QualityLevel=92};
+    encoder.Frames.Add(BitmapFrame.Create(new FormatConvertedBitmap(bitmap,PixelFormats.Bgr24,null,0)));
+    byte[] jpeg;using(var buffer=new MemoryStream()){encoder.Save(buffer);jpeg=buffer.ToArray();}
+    int page=4+i*3,image=page+1,contents=page+2;
+    obj(page,"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 842 595] /Resources << /XObject << /Board "+image+" 0 R >> /Font << /F1 3 0 R >> >> /Contents "+contents+" 0 R >>");
+    offsets.Add(output.Position);
+    write(image+" 0 obj\n<< /Type /XObject /Subtype /Image /Width "+bitmap.PixelWidth+" /Height "+bitmap.PixelHeight+" /ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /DCTDecode /Length "+jpeg.Length+" >>\nstream\n");
+    output.Write(jpeg,0,jpeg.Length);write("\nendstream\nendobj\n");
+    double scale=Math.Min(794.0/bitmap.PixelWidth,535.0/bitmap.PixelHeight);
+    double w=bitmap.PixelWidth*scale,h=bitmap.PixelHeight*scale;
+    string paint=String.Format(CultureInfo.InvariantCulture,"q {0:F3} 0 0 {1:F3} {2:F3} {3:F3} cm /Board Do Q\nBT /F1 10 Tf 24 17 Td (ClassInk  |  {4} / {5}) Tj ET\n",w,h,(842-w)/2,32+(535-h)/2,i+1,lesson.Pages.Length);
+    obj(contents,"<< /Length "+paint.Length+" >>\nstream\n"+paint+"endstream");
+   }
+   long xref=output.Position;
+   write("xref\n0 "+offsets.Count+"\n0000000000 65535 f \n");
+   foreach(long offset in offsets.Skip(1))write(offset.ToString("0000000000",CultureInfo.InvariantCulture)+" 00000 n \n");
+   write("trailer\n<< /Size "+offsets.Count+" /Root 1 0 R >>\nstartxref\n"+xref+"\n%%EOF\n");
   }
  }
  sealed class CountdownAudio : IDisposable {
@@ -308,10 +456,68 @@ namespace ClassInk {
   }
  }
  public sealed class Desk : Window {
-  Board board=new Board(); StackPanel panel; Border card; Button orb; TextBlock status; readonly List<string> history=new List<string>(); int index; bool collapsed; bool exiting; bool saved=true; string savedState;
+  Board board=new Board(); StackPanel panel; Border card; Button orb; TextBlock status; bool collapsed; bool exiting; bool saved=true;
+  sealed class PageState {
+   public readonly List<string> History=new List<string>();
+   public int Index;
+   public string Title="";
+   string previewSnapshot;
+   BitmapSource preview;
+   public PageState(string initial=null){if(initial!=null)History.Add(initial);}
+   public string Snapshot {get{return History[Index];}}
+   public BitmapSource Thumbnail(){
+    if(previewSnapshot!=Snapshot){using(var exporter=new BoardExporter())preview=exporter.Render(Snapshot,112,64,true);previewSnapshot=Snapshot;}
+    return preview;
+   }
+  }
+  sealed class PagePreview {
+   readonly PageState page;
+   public string Name {get;private set;}
+   public BitmapSource Image {get{return page.Thumbnail();}}
+   public PagePreview(PageState page,string name){this.page=page;Name=name;}
+  }
+  readonly List<PageState> pages=new List<PageState>{new PageState()};
+  int pageIndex;
+  PageState deletedPage;
+  int deletedPageIndex;
+  string[] savedPages=new string[0];
+  string[] savedTitles=new string[0];
+  List<string> history {get{return pages[pageIndex].History;}}
+  int index {get{return pages[pageIndex].Index;}set{pages[pageIndex].Index=value;}}
+  TextBlock pageNumber;
+  Button pageButton, visibilityButton;
   readonly Dictionary<string,Button> tools=new Dictionary<string,Button>();
   static readonly string[] boardSurfaces={"screen","white","black","green"};
   int themeIndex=ReadTheme();
+  string saveDirectory=ReadSaveDirectory();
+  static string SaveDirectoryPreference(){return Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),"ClassInk","save-directory.txt");}
+  static string ReadSaveDirectory(){
+   try{string path=File.ReadAllText(SaveDirectoryPreference()).Trim();if(Directory.Exists(path))return path;}
+   catch(IOException){}catch(UnauthorizedAccessException){}
+   return Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments);
+  }
+  string DefaultFolder(){return Directory.Exists(saveDirectory)?saveDirectory:Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments);}
+  void ShowFileSettings(Button anchor){
+   var box=new StackPanel{Width=300,Margin=new Thickness(5)};
+   box.Children.Add(new TextBlock{Text="板书默认保存目录",Foreground=UiInk,Margin=new Thickness(3,4,3,5)});
+   var location=new TextBlock{Text=DefaultFolder(),Foreground=UiInk,TextWrapping=TextWrapping.Wrap,ToolTip=DefaultFolder(),Margin=new Thickness(3,0,3,7)};
+   box.Children.Add(location);
+   var actions=new StackPanel{Orientation=Orientation.Horizontal};box.Children.Add(actions);
+   actions.Children.Add(Button("选择文件夹",()=>{
+    flyout.IsOpen=false;
+    using(var picker=new System.Windows.Forms.FolderBrowserDialog{Description="选择默认板书保存目录",SelectedPath=DefaultFolder(),ShowNewFolderButton=true}){
+     if(picker.ShowDialog(new DialogOwner(new WindowInteropHelper(this).Handle))!=System.Windows.Forms.DialogResult.OK)return;
+     var preference=SaveDirectoryPreference();Directory.CreateDirectory(Path.GetDirectoryName(preference));
+     AtomicWrite(preference,picker.SelectedPath);saveDirectory=picker.SelectedPath;
+    }
+    ShowFileSettings(anchor);
+   }));
+   actions.Children.Add(Button("打开保存目录",()=>{
+    var path=DefaultFolder();if(!Directory.Exists(path))throw new DirectoryNotFoundException("默认保存目录不可用，请重新选择。");
+    System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(path){UseShellExecute=true});
+   }));
+   OpenFlyout(anchor,box);
+  }
   static string ThemePreferencePath(){return Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),"ClassInk","theme.txt");}
   static int ReadTheme(){
    try{int value;if(Int32.TryParse(File.ReadAllText(ThemePreferencePath()),out value)&&value>=0&&value<themeNames.Length)return value;}
@@ -352,6 +558,7 @@ namespace ClassInk {
     row.Children.Add(button);
    }
    row.Children.Add(Button("计时音效",()=>ShowSoundSettings(anchor)));
+   row.Children.Add(Button("文件管理",()=>ShowFileSettings(anchor)));
    OpenFlyout(anchor,row);
   }
   void ShowSoundSettings(Button anchor){
@@ -399,13 +606,16 @@ namespace ClassInk {
   readonly System.Diagnostics.Stopwatch lessonWatch=new System.Diagnostics.Stopwatch();
   bool countdownMode=true;
   TimeSpan countdownDuration=ReadCountdownDuration();
+  TimeSpan customPreset=ReadTimePreference("countdown-preset.txt",TimeSpan.Zero);
   static string CountdownPreferencePath(){return Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),"ClassInk","countdown-duration.txt");}
-  static TimeSpan ReadCountdownDuration(){
+  static TimeSpan ReadCountdownDuration(){return ReadTimePreference("countdown-duration.txt",TimeSpan.FromMinutes(5));}
+  static TimeSpan ReadTimePreference(string file,TimeSpan fallback){
    try{
     int seconds;
-    if(Int32.TryParse(File.ReadAllText(CountdownPreferencePath()),out seconds)&&seconds>0&&seconds<360000)return TimeSpan.FromSeconds(seconds);
+    var path=Path.Combine(Path.GetDirectoryName(CountdownPreferencePath()),file);
+    if(Int32.TryParse(File.ReadAllText(path),out seconds)&&seconds>0&&seconds<360000)return TimeSpan.FromSeconds(seconds);
    }catch(IOException){}catch(UnauthorizedAccessException){}
-   return TimeSpan.FromMinutes(5);
+   return fallback;
   }
   int lastWarningSecond;
   bool completionPlayed;
@@ -535,13 +745,18 @@ namespace ClassInk {
    Separator();
    AddChoice(new[]{"undo","redo"},new[]{"撤销","重做"},i=>Travel(i==0?-1:1),false);
    AddChoice(new[]{"screen","board","blackboard","greenboard"},new[]{"屏幕标注","白板","黑板","仿真绿板"},i=>{board.SetSurface(boardSurfaces[i]);Commit();},false);
+   pageNumber=new TextBlock{FontSize=9,HorizontalAlignment=HorizontalAlignment.Center};
+   var pageFace=new StackPanel();pageFace.Children.Add(new ToolIcon("pages"){HorizontalAlignment=HorizontalAlignment.Center});pageFace.Children.Add(pageNumber);
+   pageButton=Button("",ShowPages);pageButton.Content=pageFace;pageButton.Height=42;panel.Children.Add(pageButton);
+   visibilityButton=Button("",ToggleAnnotations);panel.Children.Add(visibilityButton);
    AddIcon("trash","一键清空 · 可撤销",ClearBoard);
-   AddChoice(new[]{"save","open","export"},new[]{"保存笔迹","打开笔迹","导出 PNG"},i=>{if(i==0)Save();else if(i==1)Open();else Export();},false);
+   Action[] fileActions={Save,Open,Export,ExportBoard,ExportLessonPdf};
+   AddChoice(new[]{"save","open","export","image","pdf"},new[]{"保存课程","打开课程","导出屏幕 PNG","导出当前板书 PNG","导出整节课 PDF"},i=>fileActions[i](),false);
    Separator();
    clockText=new TextBlock {Text="00:00",FontFamily=new FontFamily("Consolas"),FontSize=10,HorizontalAlignment=HorizontalAlignment.Center};
    var clockFace=new StackPanel {Orientation=Orientation.Vertical};clockFace.Children.Add(new ToolIcon("clock"){HorizontalAlignment=HorizontalAlignment.Center});clockFace.Children.Add(clockText);
-   clockButton=Button("",ShowClock);clockButton.Content=clockFace;clockButton.ToolTip="打开课堂计时器";clockButton.Height=44;panel.Children.Add(clockButton);
-   clockButton.MouseRightButtonUp+=(s,e)=>{ResetClock();e.Handled=true;};
+   clockButton=Button("",ShowClock);clockButton.Content=clockFace;clockButton.ToolTip="左键打开计时器 · 右键选择预设";clockButton.Height=44;panel.Children.Add(clockButton);
+   clockButton.MouseRightButtonUp+=(s,e)=>{ShowPresets();e.Handled=true;};
    AddIcon("reset","重置计时",ResetClock);
    Button settings=null;
    settings=Button("",()=>ShowSettings(settings));settings.Content=new ToolIcon("settings");settings.ToolTip="设置外观和计时音效";panel.Children.Add(settings);
@@ -551,7 +766,15 @@ namespace ClassInk {
    ApplyTheme(themeIndex);
    noticeTimer.Tick+=(s,e)=>CloseNotice();
    PreviewKeyDown+=(s,e)=>{if(e.Key==Key.Escape&&board.Tool!="mouse"){if(flyout!=null)flyout.IsOpen=false;ActivateTool("mouse");e.Handled=true;}};
-   Loaded+=(s,e)=>{board.Show();Owner=board;board.SetTool("mouse");savedState=Document.Save(board);history.Add(savedState);board.Changed=Commit;Refresh();var h=new WindowInteropHelper(this).Handle;HwndSource.FromHwnd(h).AddHook(Hook);if(!Native.RegisterHotKey(h,1,0x4003,0x44))orb.ToolTip+="\n快捷键已占用，请用鼠标按钮切换。";Activate();};
+   Loaded+=(s,e)=>{
+    board.Show();Owner=board;board.SetTool("mouse");
+    string initial=Document.Save(board);history.Add(initial);RememberSavedLesson();
+    board.Changed=Commit;Refresh(initial);
+    var h=new WindowInteropHelper(this).Handle;HwndSource.FromHwnd(h).AddHook(Hook);
+    Native.RegisterHotKey(h,1,0x4003,0x44);Native.RegisterHotKey(h,2,0x4003,0x48);
+    Native.RegisterHotKey(h,3,0x4003,0x21);Native.RegisterHotKey(h,4,0x4003,0x22);
+    Activate();
+   };
    Closing+=(s,e)=>{if(exiting)return;e.Cancel=true;Exit();};
   }
   static ControlTemplate SoftButtonTemplate(){return (ControlTemplate)XamlReader.Parse("<ControlTemplate xmlns='http://schemas.microsoft.com/winfx/2006/xaml/presentation' TargetType='Button'><Grid><Border Background='{TemplateBinding Background}' BorderBrush='{TemplateBinding BorderBrush}' BorderThickness='{TemplateBinding BorderThickness}' CornerRadius='8'/><Border x:Name='hover' xmlns:x='http://schemas.microsoft.com/winfx/2006/xaml' Background='#0C356DE6' CornerRadius='8' Opacity='0'/><ContentPresenter HorizontalAlignment='Center' VerticalAlignment='Center' Margin='{TemplateBinding Padding}'/></Grid><ControlTemplate.Triggers><Trigger Property='IsMouseOver' Value='True'><Setter TargetName='hover' Property='Opacity' Value='1'/></Trigger><Trigger Property='IsPressed' Value='True'><Setter TargetName='hover' Property='Background' Value='#20356DE6'/></Trigger><Trigger Property='IsEnabled' Value='False'><Setter Property='Opacity' Value='0.35'/></Trigger></ControlTemplate.Triggers></ControlTemplate>");}
@@ -620,6 +843,99 @@ namespace ClassInk {
   void ToggleClock(){if(lessonWatch.IsRunning)lessonWatch.Stop();else lessonWatch.Start();UpdateClock();}
   void ResetClock(){ResetClockState();UpdateClock();}
   void ResetClockState(){lessonWatch.Reset();lastWarningSecond=0;completionPlayed=false;}
+  void ShowPages(){
+   board.FinishActiveInput();Commit();
+   var box=new StackPanel{Width=338,Margin=new Thickness(4)};
+   var row=new StackPanel{Orientation=Orientation.Horizontal};box.Children.Add(row);
+   var previous=Button("上一页",()=>SwitchPage(pageIndex-1));previous.IsEnabled=pageIndex>0;row.Children.Add(previous);
+   var next=Button("下一页",()=>SwitchPage(pageIndex+1));next.IsEnabled=pageIndex+1<pages.Count;row.Children.Add(next);
+   row.Children.Add(Button("新建页",NewPage));
+   row.Children.Add(Button("复制页",DuplicateCurrentPage));
+   var delete=Button("删除当前页",DeleteCurrentPage);delete.IsEnabled=pages.Count>1;row.Children.Add(delete);
+   if(deletedPage!=null)row.Children.Add(Button("恢复最近删除",RestoreDeletedPage));
+   var rename=new DockPanel{Margin=new Thickness(4,5,4,6)};box.Children.Add(rename);
+   var title=new TextBox{Text=pages[pageIndex].Title,MaxLength=40,MinHeight=28,VerticalContentAlignment=VerticalAlignment.Center,ToolTip="当前页标题，留空时显示页码"};
+   Action apply=()=>{RenamePage(title.Text);ShowPages();};
+   var renameButton=Button("设标题",apply);DockPanel.SetDock(renameButton,Dock.Right);rename.Children.Add(renameButton);rename.Children.Add(title);
+   title.KeyDown+=(s,e)=>{if(e.Key==Key.Enter){apply();e.Handled=true;}};
+   var list=new ListBox{Height=Math.Min(330,pages.Count*72+8),Background=Brushes.Transparent,BorderThickness=new Thickness(0),Foreground=UiInk};
+   var item=new FrameworkElementFactory(typeof(StackPanel));item.SetValue(StackPanel.OrientationProperty,Orientation.Horizontal);item.SetValue(FrameworkElement.MarginProperty,new Thickness(4));
+   var thumb=new FrameworkElementFactory(typeof(Image));thumb.SetBinding(Image.SourceProperty,new System.Windows.Data.Binding("Image"));thumb.SetValue(FrameworkElement.WidthProperty,112.0);thumb.SetValue(FrameworkElement.HeightProperty,60.0);item.AppendChild(thumb);
+   var name=new FrameworkElementFactory(typeof(TextBlock));name.SetBinding(TextBlock.TextProperty,new System.Windows.Data.Binding("Name"));name.SetValue(FrameworkElement.MarginProperty,new Thickness(10,0,0,0));name.SetValue(FrameworkElement.MaxWidthProperty,172.0);name.SetValue(FrameworkElement.VerticalAlignmentProperty,VerticalAlignment.Center);name.SetValue(TextBlock.TextTrimmingProperty,TextTrimming.CharacterEllipsis);item.AppendChild(name);
+   list.ItemTemplate=new DataTemplate{VisualTree=item};
+   list.ItemsSource=pages.Select((page,i)=>new PagePreview(page,PageTitle(i))).ToArray();list.SelectedIndex=pageIndex;
+   list.SelectionChanged+=(s,e)=>{if(list.SelectedIndex>=0)SwitchPage(list.SelectedIndex);};
+   box.Children.Add(list);OpenFlyout(pageButton,box);list.ScrollIntoView(list.SelectedItem);
+  }
+  string PageTitle(int index){return "第 "+(index+1)+" 页"+(String.IsNullOrWhiteSpace(pages[index].Title)?"":" · "+pages[index].Title);}
+  void RenamePage(string title){pages[pageIndex].Title=title.Trim();Refresh(history[index]);}
+  void DuplicateCurrentPage(){
+   board.FinishActiveInput();Commit();
+   string title=pages[pageIndex].Title;
+   string copyTitle=title.Length==0?"副本":title.Substring(0,Math.Min(title.Length,36))+"（副本）";
+   pages.Insert(pageIndex+1,new PageState(history[index]){Title=copyTitle});
+   SwitchPage(pageIndex+1);
+  }
+  void SwitchPage(int target){
+   if(target<0||target>=pages.Count||target==pageIndex)return;
+   board.FinishActiveInput();Commit();
+   if(flyout!=null)flyout.IsOpen=false;CloseNotice();
+   Document.Load(board,pages[target].Snapshot);pageIndex=target;Refresh();
+  }
+  void NewPage(){
+   board.FinishActiveInput();Commit();
+   string blank=Document.Save(board,true);
+   pages.Insert(pageIndex+1,new PageState(blank));
+   SwitchPage(pageIndex+1);
+  }
+  void DeleteCurrentPage(){
+   if(pages.Count<=1)return;
+   board.FinishActiveInput();Commit();
+   int removed=pageIndex;
+   int adjacent=removed+1<pages.Count?removed+1:removed-1;
+   Document.Load(board,pages[adjacent].Snapshot);
+   deletedPage=pages[removed];deletedPageIndex=removed;
+   pages.RemoveAt(removed);pageIndex=Math.Min(removed,pages.Count-1);
+   if(flyout!=null)flyout.IsOpen=false;
+   Refresh(history[index]);
+   ShowNotice("已删除第 "+(removed+1)+" 页",RestoreDeletedPage);
+  }
+  void RestoreDeletedPage(){
+   if(deletedPage==null)return;
+   board.FinishActiveInput();Commit();
+   Document.Load(board,deletedPage.Snapshot);
+   int target=Math.Min(deletedPageIndex,pages.Count);
+   pages.Insert(target,deletedPage);pageIndex=target;deletedPage=null;
+   if(flyout!=null)flyout.IsOpen=false;
+   CloseNotice();Refresh(history[index]);
+   ShowNotice("已恢复第 "+(pageIndex+1)+" 页");
+  }
+  void ToggleAnnotations(){
+   bool hide=!board.AnnotationsHidden;
+   if(hide){board.FinishActiveInput();board.SetTool("mouse");}
+   board.SetAnnotationsHidden(hide);Refresh();
+   ShowNotice(hide?"已隐藏板书 · 可操作课件":"板书已恢复");
+  }
+  void ShowPresets(){
+   var list=new StackPanel();
+   list.Children.Add(Button("思考 · 30 秒",()=>StartPreset(TimeSpan.FromSeconds(30))));
+   list.Children.Add(Button("随堂练习 · 3 分钟",()=>StartPreset(TimeSpan.FromMinutes(3))));
+   list.Children.Add(Button("独立编程 · 10 分钟",()=>StartPreset(TimeSpan.FromMinutes(10))));
+   if(customPreset>TimeSpan.Zero)list.Children.Add(Button("自定义 · "+ClockLabel(customPreset),()=>StartPreset(customPreset)));
+   list.Children.Add(Button("将当前时长存为自定义",()=>{
+    var path=Path.Combine(Path.GetDirectoryName(CountdownPreferencePath()),"countdown-preset.txt");
+    Directory.CreateDirectory(Path.GetDirectoryName(path));
+    AtomicWrite(path,((int)countdownDuration.TotalSeconds).ToString(CultureInfo.InvariantCulture));
+    customPreset=countdownDuration;flyout.IsOpen=false;ShowNotice("已保存自定义计时预设");
+   }));
+   OpenFlyout(clockButton,list);
+  }
+  void StartPreset(TimeSpan duration){
+   ResetClockState();
+   if(timerWindow!=null)timerWindow.SetDuration(duration);
+   ConfigureClock(true,duration,false);
+   if(IsLoaded)ShowClock();
+  }
   void ShowClock(){
    board.FinishText();if(flyout!=null)flyout.IsOpen=false;
    if(timerWindow==null){
@@ -660,6 +976,7 @@ namespace ClassInk {
    var custom=Button("",()=>{flyout.IsOpen=false;ChooseCustomColor();});custom.Content=new ToolIcon("custom");custom.ToolTip="自定义颜色 / RGB";row.Children.Add(custom);OpenFlyout(customColor,row);
   }
   void ClearBoard(){
+   board.FinishActiveInput();
    board.FinishText(false);
    if(board.Ink.Strokes.Count==0&&board.Ink.Children.Count==0)return;
    board.Ink.Strokes.Clear();board.Ink.Children.Clear();Commit();
@@ -670,12 +987,12 @@ namespace ClassInk {
    var files=choices.First(g=>g.Icons.Contains("save"));files.Step(1);if(files.Index!=1)throw new Exception("File choice did not advance");files.Step(-1);if(files.Index!=0)throw new Exception("File choice did not reverse");
    var thickness=choices.First(g=>g.Icons.Contains("thin"));thickness.Step(1);if(board.Size!=6||board.Ink.DefaultDrawingAttributes.Width!=6)throw new Exception("Grouped thickness did not apply");thickness.Step(-1);
    CycleColor(1);if(board.Color!=(Color)ColorConverter.ConvertFromString(palette[1]))throw new Exception("Color choice did not apply");CycleColor(-1);
-   history.Clear();index=0;savedState=Document.Save(board);history.Add(savedState);
+   history.Clear();index=0;string initial=Document.Save(board);history.Add(initial);RememberSavedLesson();
    board.Ink.Strokes.Add(Board.Shape("arrow",new Point(10,20),new Point(100,100),Colors.Coral,4));board.AddText("课堂测试",20,30,"#FF123456",24);Commit();ClearBoard();
    if(board.Ink.Strokes.Count!=0||board.Ink.Children.Count!=0)throw new Exception("One-click clear failed");Travel(-1);
    if(board.Ink.Strokes.Count!=1||board.Ink.Children.Count!=1)throw new Exception("Undo clear failed");Travel(1);
    if(board.Ink.Strokes.Count!=0||board.Ink.Children.Count!=0)throw new Exception("Redo clear failed");
-   BeginOrbDrag(new Point(0,0));MoveOrb(new Point(160,120));EndOrbDrag();var position=floatPosition;
+   BeginOrbDrag(new Point(0,0));MoveOrb(new Point(160,0));EndOrbDrag();var position=floatPosition;
    if(!collapsed||position.X<=SystemParameters.WorkArea.Left)throw new Exception("Orb drag failed");SetCollapsed(false);
    if(Top!=position.Y||Left!=position.X)throw new Exception("Vertical toolbar detached from orb");
    BeginOrbDrag(new Point(0,0));MoveOrb(new Point(12,0));EndOrbDrag();
@@ -687,6 +1004,55 @@ namespace ClassInk {
    if(lessonWatch.Elapsed!=elapsed)throw new Exception("Paused clock advanced");ToggleClock();if(!lessonWatch.IsRunning||lessonWatch.Elapsed<elapsed)throw new Exception("Clock resume failed");ResetClock();
    if(lessonWatch.Elapsed!=TimeSpan.Zero||lessonWatch.IsRunning||clockText.Text!="00:00")throw new Exception("Clock reset failed");
    floatPosition=new Point(SystemParameters.WorkArea.Left,SystemParameters.WorkArea.Top);SetCollapsed(true);clockTick.Stop();
+  }
+  internal void VerifyLessonPages(){
+   board.SetSurface("green");board.AddText("第一页",24,40,"#FFFFFFFF",24);Commit();
+   NewPage();
+   if(pageIndex!=1||pages.Count!=2||board.Surface!="green"||board.Ink.Children.Count!=0)throw new Exception("New lesson page did not start empty");
+   board.SetSurface("white");board.AddText("第二页",34,50,"#FF000000",24);Commit();
+   string second=Document.Save(board);
+   ToggleAnnotations();
+   if(!board.AnnotationsHidden||board.Tool!="mouse"||Document.Save(board)!=second)throw new Exception("Hiding annotations changed lesson content");
+   ToggleAnnotations();
+   if(board.AnnotationsHidden||Document.Save(board)!=second)throw new Exception("Restoring annotations changed lesson content");
+   SwitchPage(0);
+   if(board.Surface!="green"||board.Ink.Children.OfType<TextBlock>().Single().Text!="第一页")throw new Exception("First page content was lost");
+   SwitchPage(1);Travel(-1);
+   if(board.Ink.Children.Count!=0||board.Surface!="green")throw new Exception("Page-local undo was not preserved");
+   Travel(1);
+   var lesson=new LessonDocument(pages.Select(page=>page.Snapshot).ToArray(),pageIndex);
+   LoadLesson(LessonDocument.Load(lesson.Save()));
+   if(pageIndex!=1||pages.Count!=2||Document.Save(board)!=second||!MatchesSavedLesson())throw new Exception("Lesson did not round-trip");
+   SwitchPage(0);
+   if(!MatchesSavedLesson())throw new Exception("Navigation marked a saved lesson as changed");
+   DeleteCurrentPage();
+   if(pages.Count!=1||pageIndex!=0||Document.Save(board)!=second||MatchesSavedLesson())throw new Exception("Deleting the first page did not select its successor");
+   DeleteCurrentPage();
+   if(pages.Count!=1)throw new Exception("The last page could be deleted");
+   RestoreDeletedPage();
+   if(pages.Count!=2||pageIndex!=0||board.Surface!="green"||!MatchesSavedLesson())throw new Exception("Deleted page was not restored at its original position");
+   SwitchPage(1);DeleteCurrentPage();
+   if(pages.Count!=1||pageIndex!=0||board.Surface!="green")throw new Exception("Deleting the last indexed page did not select its predecessor");
+   RestoreDeletedPage();
+   if(pages.Count!=2||pageIndex!=1||Document.Save(board)!=second)throw new Exception("Restoring the last indexed page lost its content");
+   RenamePage("答案 <C++>");
+   if(MatchesSavedLesson())throw new Exception("Renaming a page did not mark the lesson changed");
+   DuplicateCurrentPage();
+   if(pages.Count!=3||pageIndex!=2||pages[2].Title!="答案 <C++>（副本）"||Document.Save(board)!=second)throw new Exception("Page duplicate lost its title or ink");
+   ClearBoard();SwitchPage(1);
+   if(Document.Save(board)!=second)throw new Exception("Editing a duplicate changed its original");
+   SwitchPage(2);DeleteCurrentPage();
+   var titled=LessonDocument.Load(CurrentLesson().Save());LoadLesson(titled);
+   if(pages[1].Title!="答案 <C++>"||!MatchesSavedLesson())throw new Exception("Page title did not survive a round trip");
+   using(var exporter=new BoardExporter()){
+    string directory=AppDomain.CurrentDomain.BaseDirectory;
+    var encoder=new PngBitmapEncoder();encoder.Frames.Add(BitmapFrame.Create(exporter.Render(titled.Pages[0],1600,1100,false)));
+    WriteFile(Path.Combine(directory,"self-test-board.png"),encoder.Save);
+    WriteFile(Path.Combine(directory,"self-test-lesson.pdf"),stream=>exporter.WritePdf(stream,titled));
+   }
+   LoadLesson(LessonDocument.Load(second));
+   if(pages.Count!=1||pageIndex!=0||Document.Save(board)!=second)throw new Exception("Legacy page did not open as a lesson");
+   board.SetSurface("screen");LoadLesson(new LessonDocument(new[]{Document.Save(board,true)},0));
   }
   void UpdateClock(){
    bool finished=countdownMode&&lessonWatch.Elapsed>=countdownDuration;
@@ -713,6 +1079,8 @@ namespace ClassInk {
   }
   internal void RenderChoicePreview(string path){var frame=FlyoutFrame(ChoicePanel(choices.First(g=>g.Icons.Contains("arrow"))));frame.Measure(new Size(Double.PositiveInfinity,Double.PositiveInfinity));frame.Arrange(new Rect(frame.DesiredSize));var image=new RenderTargetBitmap((int)Math.Ceiling(frame.ActualWidth),(int)Math.Ceiling(frame.ActualHeight),96,96,PixelFormats.Pbgra32);image.Render(frame);var encoder=new PngBitmapEncoder();encoder.Frames.Add(BitmapFrame.Create(image));using(var f=File.Create(path))encoder.Save(f);}
   internal void VerifyCountdownAndRender(string path){
+   StartPreset(TimeSpan.FromSeconds(30));
+   if(countdownDuration!=TimeSpan.FromSeconds(30)||!lessonWatch.IsRunning||ClockValue().TotalSeconds!=30)throw new Exception("Countdown preset did not start");
    ConfigureClock(true,TimeSpan.FromSeconds(10),false);
    if(lastWarningSecond!=10)throw new Exception("Final ten seconds did not start ticking");
    PumpAnimation(1100);UpdateClock();
@@ -728,22 +1096,130 @@ namespace ClassInk {
   void Label(string text){panel.Children.Add(new TextBlock{Text=text,Foreground=B("#8896B3"),FontSize=11,Margin=new Thickness(3,12,0,6)});}
   Button Button(string text,Action action){var b=new Button {Content=text,MinWidth=30,Height=34,Margin=new Thickness(2),Foreground=UiInk,Background=Brushes.Transparent,BorderThickness=new Thickness(0),FontSize=11,FontFamily=new FontFamily("Microsoft YaHei UI"),Cursor=Cursors.Hand,Padding=new Thickness(2)};if(text=="undo"||text=="redo")b.Content=new ToolIcon(text);b.Template=SoftButtonTemplate();b.Click+=(s,e)=>{try{action();}catch(Exception ex){MessageBox.Show(ex.Message,"课堂笔 · 操作未完成");}};return b;}
   void AddTool(Panel grid,string key,string text){var b=Button(text,()=>{board.SetTool(key);Refresh();});b.Content=new ToolIcon(key);b.ToolTip=text;tools[key]=b;grid.Children.Add(b);}
-  void Refresh(){foreach(var group in choices){int selected=group.Icons[0]=="screen"?Array.IndexOf(boardSurfaces,board.Surface):Array.IndexOf(group.Icons,board.Tool);if(selected>=0)group.Index=selected;group.Refresh();}foreach(var kv in tools){bool active=kv.Key==board.Tool;kv.Value.Background=active?ActiveFill:Brushes.Transparent;kv.Value.Foreground=active?ActiveInk:UiInk;((ToolIcon)kv.Value.Content).InvalidateVisual();}saved=Document.Save(board)==savedState;orb.ToolTip=(board.Tool=="mouse"?"● 鼠标穿透 · 操作下层软件":"● 标注中 · Esc 返回鼠标")+(saved?"":"  · 未保存");ReportToolChange();}
-  void Commit(){string state=Document.Save(board);if(history.Count==0||state!=history[index]){if(noticeOffersUndo)CloseNotice();if(index+1<history.Count)history.RemoveRange(index+1,history.Count-index-1);history.Add(state);if(history.Count>60)history.RemoveAt(0);index=history.Count-1;}Refresh();}
-  void Travel(int step){int n=index+step;if(n<0||n>=history.Count)return;CloseNotice();Document.Load(board,history[n]);index=n;Refresh();}
-  IntPtr Hook(IntPtr h,int msg,IntPtr w,IntPtr l,ref bool handled){if(msg==0x312&&w.ToInt32()==1){board.SetTool(board.Tool=="mouse"?"pen":"mouse");Refresh();handled=true;}return IntPtr.Zero;}
-  bool Confirm(){if(Document.Save(board)==savedState)return true;var r=MessageBox.Show("是否保存当前笔迹？","课堂笔",MessageBoxButton.YesNoCancel);if(r==MessageBoxResult.Cancel)return false;if(r==MessageBoxResult.Yes){Save();return Document.Save(board)==savedState;}return true;}
-  void Save(){board.FinishText();var d=new SaveFileDialog {Filter="课堂笔可编辑文件|*.classink",FileName="课堂板书-"+DateTime.Now.ToString("yyyyMMdd-HHmmss")};if(d.ShowDialog(this)!=true)return;string xml=Document.Save(board);AtomicWrite(d.FileName,xml);savedState=xml;Refresh();}
-  internal static void AtomicWrite(string path,string content){string temp=path+"."+Guid.NewGuid().ToString("N")+".tmp";try{File.WriteAllText(temp,content,System.Text.Encoding.UTF8);if(File.Exists(path))File.Replace(temp,path,null);else File.Move(temp,path);}finally{if(File.Exists(temp))File.Delete(temp);}}
-  void Open(){if(!Confirm())return;var d=new OpenFileDialog {Filter="课堂笔可编辑文件|*.classink"};if(d.ShowDialog(this)!=true)return;Document.Load(board,File.ReadAllText(d.FileName));Commit();savedState=Document.Save(board);Refresh();}
+  void Refresh(string serialized=null){
+   foreach(var group in choices){
+    int selected=group.Icons[0]=="screen"?Array.IndexOf(boardSurfaces,board.Surface):Array.IndexOf(group.Icons,board.Tool);
+    if(selected>=0)group.Index=selected;
+    group.Refresh();
+   }
+   foreach(var tool in tools){
+    bool active=tool.Key==board.Tool;
+    tool.Value.Background=active?ActiveFill:Brushes.Transparent;
+    tool.Value.Foreground=active?ActiveInk:UiInk;
+    ((ToolIcon)tool.Value.Content).InvalidateVisual();
+   }
+   pageNumber.Text=(pageIndex+1)+"/"+pages.Count;
+   pageButton.ToolTip="第 "+(pageIndex+1)+" / "+pages.Count+" 页 · Ctrl+Alt+PageUp / PageDown 翻页";
+   bool hidden=board.AnnotationsHidden;
+   visibilityButton.Content=new ToolIcon(hidden?"eyeoff":"eye");
+   visibilityButton.Foreground=hidden?ActiveInk:UiInk;
+   visibilityButton.Background=hidden?ActiveFill:Brushes.Transparent;
+   visibilityButton.ToolTip=(hidden?"恢复板书":"隐藏板书")+" · Ctrl+Alt+H";
+   saved=MatchesSavedLesson(serialized);
+   orb.ToolTip=(hidden?"● 板书已隐藏":board.Tool=="mouse"?"● 鼠标穿透 · 操作下层软件":"● 标注中 · Esc 返回鼠标")+(saved?"":"  · 未保存");
+   ReportToolChange();
+  }
+  bool MatchesSavedLesson(string active=null){
+   if(savedPages.Length!=pages.Count)return false;
+   if(active==null)active=Document.Save(board);
+   for(int i=0;i<pages.Count;i++)if(savedTitles[i]!=pages[i].Title||savedPages[i]!=(i==pageIndex?active:pages[i].Snapshot))return false;
+   return true;
+  }
+  void Commit(){
+   string state=Document.Save(board);
+   if(history.Count==0||state!=history[index]){
+    if(noticeOffersUndo)CloseNotice();
+    if(index+1<history.Count)history.RemoveRange(index+1,history.Count-index-1);
+    history.Add(state);
+    if(history.Count>60)history.RemoveAt(0);
+    index=history.Count-1;
+   }
+   Refresh(state);
+  }
+  void Travel(int step){
+   board.FinishActiveInput();
+   int target=index+step;if(target<0||target>=history.Count)return;
+   CloseNotice();Document.Load(board,history[target]);index=target;Refresh(history[target]);
+  }
+  IntPtr Hook(IntPtr h,int msg,IntPtr w,IntPtr l,ref bool handled){
+   if(msg!=0x312)return IntPtr.Zero;
+   switch(w.ToInt32()){
+    case 1:ActivateTool(board.Tool=="mouse"?"pen":"mouse");break;
+    case 2:ToggleAnnotations();break;
+    case 3:SwitchPage(pageIndex-1);break;
+    case 4:SwitchPage(pageIndex+1);break;
+    default:return IntPtr.Zero;
+   }
+   handled=true;return IntPtr.Zero;
+  }
+  bool Confirm(){
+   board.FinishActiveInput();
+   if(MatchesSavedLesson())return true;
+   var result=MessageBox.Show("是否保存当前整节课的板书？","课堂笔",MessageBoxButton.YesNoCancel);
+   if(result==MessageBoxResult.Cancel)return false;
+   if(result==MessageBoxResult.Yes){Save();return MatchesSavedLesson();}
+   return true;
+  }
+  void Save(){
+   board.FinishActiveInput();Commit();
+   var dialog=new SaveFileDialog {Filter="课堂笔课程文件|*.classink",InitialDirectory=DefaultFolder(),FileName="课堂板书-"+DateTime.Now.ToString("yyyyMMdd-HHmmss")};
+   if(dialog.ShowDialog(this)!=true)return;
+   AtomicWrite(dialog.FileName,CurrentLesson().Save());
+   RememberSavedLesson();Refresh(history[index]);
+  }
+  LessonDocument CurrentLesson(){return new LessonDocument(pages.Select(page=>page.Snapshot).ToArray(),pageIndex,pages.Select(page=>page.Title).ToArray());}
+  void RememberSavedLesson(){savedPages=pages.Select(page=>page.Snapshot).ToArray();savedTitles=pages.Select(page=>page.Title).ToArray();}
+  internal static void AtomicWrite(string path,string content){
+   WriteFile(path,stream=>{using(var writer=new StreamWriter(stream,System.Text.Encoding.UTF8))writer.Write(content);});
+  }
+  static void WriteFile(string path,Action<Stream> write){
+   string temp=path+"."+Guid.NewGuid().ToString("N")+".tmp";
+   try{
+    using(var stream=new FileStream(temp,FileMode.CreateNew,FileAccess.Write))write(stream);
+    if(File.Exists(path))File.Replace(temp,path,null);else File.Move(temp,path);
+   }finally{if(File.Exists(temp))File.Delete(temp);}
+  }
+  void Open(){
+   if(!Confirm())return;
+   var dialog=new OpenFileDialog{Filter="课堂笔课程或板书|*.classink",InitialDirectory=DefaultFolder()};
+   if(dialog.ShowDialog(this)!=true)return;
+   var lesson=LessonDocument.Load(File.ReadAllText(dialog.FileName));
+   LoadLesson(lesson);
+  }
+  void LoadLesson(LessonDocument lesson){
+   Document.Load(board,lesson.Pages[lesson.ActivePage]);
+   pages.Clear();
+   for(int i=0;i<lesson.Pages.Length;i++)pages.Add(new PageState(lesson.Pages[i]){Title=lesson.Titles[i]});
+   deletedPage=null;
+   pageIndex=lesson.ActivePage;pages[pageIndex]=new PageState(Document.Save(board)){Title=lesson.Titles[pageIndex]};
+   RememberSavedLesson();
+   CloseNotice();Refresh(history[index]);
+  }
   async void Export(){
-   var d=new SaveFileDialog {Filter="PNG 图片|*.png",FileName="课堂板书-"+DateTime.Now.ToString("yyyyMMdd-HHmmss")};if(d.ShowDialog(this)!=true)return;
+   var d=new SaveFileDialog {Filter="PNG 图片|*.png",InitialDirectory=DefaultFolder(),FileName="课堂屏幕-"+DateTime.Now.ToString("yyyyMMdd-HHmmss")};if(d.ShowDialog(this)!=true)return;
    string tool=board.Tool;try { CloseNotice();Hide();board.SetTool("mouse");await System.Threading.Tasks.Task.Delay(240);
     var bounds=System.Windows.Forms.SystemInformation.VirtualScreen;
     using(var bmp=new System.Drawing.Bitmap(bounds.Width,bounds.Height)) {using(var g=System.Drawing.Graphics.FromImage(bmp))g.CopyFromScreen(bounds.Left,bounds.Top,0,0,bmp.Size);bmp.Save(d.FileName,System.Drawing.Imaging.ImageFormat.Png);}
    }catch(Exception ex){MessageBox.Show(ex.Message,"导出失败");}finally{Show();board.SetTool(tool);Refresh();}
   }
-  void Exit(){exiting=true;CloseNotice();clockTick.Stop();countdownAudio.Dispose();Native.UnregisterHotKey(new WindowInteropHelper(this).Handle,1);Application.Current.Shutdown();}
+  void ExportBoard(){
+   board.FinishActiveInput();Commit();
+   var dialog=new SaveFileDialog{Filter="PNG 图片|*.png",InitialDirectory=DefaultFolder(),FileName="板书-第"+(pageIndex+1)+"页"};
+   if(dialog.ShowDialog(this)!=true)return;
+   using(var exporter=new BoardExporter()){
+    var encoder=new PngBitmapEncoder();encoder.Frames.Add(BitmapFrame.Create(exporter.Render(history[index],4096,4096,false)));
+    WriteFile(dialog.FileName,encoder.Save);
+   }
+   ShowNotice("已导出当前板书 PNG");
+  }
+  void ExportLessonPdf(){
+   board.FinishActiveInput();Commit();
+   var dialog=new SaveFileDialog{Filter="PDF 文档|*.pdf",InitialDirectory=DefaultFolder(),FileName="课堂板书-"+DateTime.Now.ToString("yyyyMMdd-HHmmss")};
+   if(dialog.ShowDialog(this)!=true)return;
+   using(var exporter=new BoardExporter())WriteFile(dialog.FileName,stream=>exporter.WritePdf(stream,CurrentLesson()));
+   ShowNotice("已导出整节课 PDF");
+  }
+  void Exit(){exiting=true;CloseNotice();clockTick.Stop();countdownAudio.Dispose();var handle=new WindowInteropHelper(this).Handle;for(int id=1;id<=4;id++)Native.UnregisterHotKey(handle,id);Application.Current.Shutdown();}
  }
  public sealed class LessonClockWindow : Window {
   readonly int[] durationParts=new int[3];
@@ -758,7 +1234,7 @@ namespace ClassInk {
 
   public LessonClockWindow(bool countdown,TimeSpan duration,Action<bool,TimeSpan,bool> callback){
    this.countdown=countdown;command=callback;
-   durationParts[0]=(int)duration.TotalHours;durationParts[1]=duration.Minutes;durationParts[2]=duration.Seconds;
+   SetDuration(duration);
    Title="课堂计时器";Width=Math.Min(680,SystemParameters.WorkArea.Width);Height=320;WindowStyle=WindowStyle.None;AllowsTransparency=true;ResizeMode=ResizeMode.NoResize;
    Topmost=true;WindowStartupLocation=WindowStartupLocation.CenterScreen;Background=Brushes.Transparent;FontFamily=new FontFamily("Microsoft YaHei UI");
    MinWidth=300;MinHeight=155;
@@ -826,6 +1302,12 @@ namespace ClassInk {
    }
   }
   static int Cycle(int current,int delta,int count){return (current+Math.Sign(delta)+count)%count;}
+  public void SetDuration(TimeSpan duration){
+   durationParts[0]=(int)duration.TotalHours;
+   durationParts[1]=duration.Minutes;
+   durationParts[2]=duration.Seconds;
+   editingDuration=false;
+  }
   void AdjustDigits(int part,int delta){
    if(!countdown)return;
    durationParts[part]=Cycle(durationParts[part],delta,part==0?100:60);
@@ -863,6 +1345,13 @@ namespace ClassInk {
    return pixels.Any(value=>value!=0);
   }
   public static void Run(){
+   var mouseStroke=new MouseInkStroke(new Point(10,10),new DrawingAttributes{Width=4,Height=4});
+   mouseStroke.Append(new Point(72,10));mouseStroke.Append(new Point(72,64));mouseStroke.Complete(new Point(72,68));
+   var samples=mouseStroke.InkStroke.StylusPoints;
+   if(samples.Count<20||samples[0].X!=10||samples[samples.Count-1].Y!=68||!mouseStroke.InkStroke.HitTest(new Point(40,10),2))
+    throw new Exception("Sparse mouse movement did not produce continuous ink");
+   var tap=new MouseInkStroke(new Point(15,15),new DrawingAttributes());tap.Complete(new Point(15,15));
+   if(tap.InkStroke.StylusPoints.Count!=1)throw new Exception("Mouse tap did not preserve a single dot");
    var effect=new LaserRipples();effect.Measure(new Size(120,120));effect.Arrange(new Rect(0,0,120,120));
    effect.Click(new Point(60,60));
    if(!HasLaserPixels(effect))throw new Exception("Laser ripple did not render");
@@ -887,7 +1376,8 @@ namespace ClassInk {
    var target=new RenderTargetBitmap(400,300,96,96,PixelFormats.Pbgra32);copy.Ink.Measure(new Size(400,300));copy.Ink.Arrange(new Rect(0,0,400,300));target.Render(copy.Ink);
    var encoder=new PngBitmapEncoder();encoder.Frames.Add(BitmapFrame.Create(target));using(var f=File.Create(Path.Combine(AppDomain.CurrentDomain.BaseDirectory,"self-test.png")))encoder.Save(f);
    File.WriteAllText(Path.Combine(AppDomain.CurrentDomain.BaseDirectory,"self-test.txt"),"PASS: four shapes, multilingual text, editable round trip, DTD rejection, atomic overwrite, PNG rendering.");
-   var desk=new Desk();desk.VerifyInteractions();desk.VerifyMotion();desk.RenderPreview(false,Path.Combine(AppDomain.CurrentDomain.BaseDirectory,"orb-preview.png"));desk.RenderPreview(true,Path.Combine(AppDomain.CurrentDomain.BaseDirectory,"toolbar-preview.png"));
+   var desk=new Desk();desk.VerifyInteractions();desk.VerifyLessonPages();desk.VerifyMotion();desk.RenderPreview(false,Path.Combine(AppDomain.CurrentDomain.BaseDirectory,"orb-preview.png"));desk.RenderPreview(true,Path.Combine(AppDomain.CurrentDomain.BaseDirectory,"toolbar-preview.png"));
+   File.AppendAllText(Path.Combine(AppDomain.CurrentDomain.BaseDirectory,"self-test.txt"),"\nPASS: multi-page save/load, titles, independent duplicates, delete/restore, legacy import, per-page undo, annotation visibility and PNG/PDF export.");
    desk.RenderChoicePreview(Path.Combine(AppDomain.CurrentDomain.BaseDirectory,"choices-preview.png"));
    desk.VerifyCountdownAndRender(Path.Combine(AppDomain.CurrentDomain.BaseDirectory,"timer-preview.png"));
    File.AppendAllText(Path.Combine(AppDomain.CurrentDomain.BaseDirectory,"self-test.txt"),"\nPASS: transparent text editor, countdown completion/reset, large timer window rendering.");
