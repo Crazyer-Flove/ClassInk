@@ -116,15 +116,19 @@ final class App: NSObject, NSApplicationDelegate {
         do { try data.write(to: url, options: .atomic) } catch { NSAlert(error: error).runModal() }
     }
     @objc func support() {
-        let row = NSStackView(); row.frame = CGRect(x: 0, y: 0, width: 410, height: 196)
+        let row = NSStackView(); row.frame = CGRect(x: 0, y: 0, width: 410, height: 224)
         for index in 1...2 {
+            let column = NSStackView(); column.orientation = .vertical; column.alignment = .centerX
+            let label = NSTextField(labelWithString: index == 1 ? "支付宝" : "微信")
+            label.font = .systemFont(ofSize: 15, weight: .semibold)
+            column.addArrangedSubview(label)
             let view = NSImageView(); view.imageScaling = .scaleProportionallyUpOrDown
             if let url = Bundle.main.url(forResource: "support-\(index)", withExtension: "jpg") { view.image = NSImage(contentsOf: url) }
             view.widthAnchor.constraint(equalToConstant: 196).isActive = true
             view.heightAnchor.constraint(equalToConstant: 196).isActive = true
-            row.addArrangedSubview(view)
+            column.addArrangedSubview(view); row.addArrangedSubview(column)
         }
-        let alert = NSAlert(); alert.messageText = "打赏支持课堂笔"; alert.informativeText = "使用微信扫一扫，自愿支持。"; alert.accessoryView = row; alert.runModal()
+        let alert = NSAlert(); alert.messageText = "打赏支持课堂笔"; alert.informativeText = "请用支付宝或微信扫描对应二维码，自愿支持。"; alert.accessoryView = row; alert.runModal()
     }
 }
 

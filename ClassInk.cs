@@ -19,8 +19,8 @@ using Microsoft.Win32;
 
 [assembly: System.Reflection.AssemblyTitle("课堂笔 ClassInk")]
 [assembly: System.Reflection.AssemblyProduct("ClassInk")]
-[assembly: System.Reflection.AssemblyVersion("1.4.0.0")]
-[assembly: System.Reflection.AssemblyFileVersion("1.4.0.0")]
+[assembly: System.Reflection.AssemblyVersion("1.4.1.0")]
+[assembly: System.Reflection.AssemblyFileVersion("1.4.1.0")]
 
 namespace ClassInk {
  public sealed class ToolIcon : FrameworkElement {
@@ -740,13 +740,16 @@ namespace ClassInk {
    if(flyout!=null)flyout.IsOpen=false;
    var row=new StackPanel{Orientation=Orientation.Horizontal,HorizontalAlignment=HorizontalAlignment.Center};
    var panel=new StackPanel{Margin=new Thickness(18)};
-   panel.Children.Add(new TextBlock{Text="使用微信扫一扫，自愿支持课堂笔",FontSize=14,Foreground=UiInk,Margin=new Thickness(4,0,4,12)});
+   panel.Children.Add(new TextBlock{Text="请用支付宝或微信扫描对应二维码，自愿支持课堂笔",FontSize=14,Foreground=UiInk,Margin=new Thickness(4,0,4,12)});
    panel.Children.Add(row);
    for(int i=1;i<=2;i++){
     using(var stream=typeof(Desk).Assembly.GetManifestResourceStream("ClassInk.Support"+i+".jpg")){
      if(stream==null)throw new InvalidOperationException("打赏图片资源缺失。");
      var card=new Border{Background=Brushes.White,Padding=new Thickness(8),Margin=new Thickness(4)};
-     card.Child=new Image{Source=BitmapFrame.Create(stream,BitmapCreateOptions.None,BitmapCacheOption.OnLoad),Width=205,Height=205,Stretch=Stretch.Uniform};row.Children.Add(card);
+     var contents=new StackPanel();
+     contents.Children.Add(new TextBlock{Text=i==1?"支付宝":"微信",Foreground=Brushes.Black,FontSize=15,FontWeight=FontWeights.SemiBold,HorizontalAlignment=HorizontalAlignment.Center,Margin=new Thickness(0,2,0,8)});
+     contents.Children.Add(new Image{Source=BitmapFrame.Create(stream,BitmapCreateOptions.None,BitmapCacheOption.OnLoad),Width=205,Height=205,Stretch=Stretch.Uniform});
+     card.Child=contents;row.Children.Add(card);
     }
    }
    var window=new Window{Title="打赏支持 · 课堂笔",Owner=this,ShowInTaskbar=false,Topmost=true,SizeToContent=SizeToContent.WidthAndHeight,ResizeMode=ResizeMode.NoResize,WindowStartupLocation=WindowStartupLocation.CenterScreen,Background=B(themeSurfaces[themeIndex]),Content=panel};
