@@ -19,8 +19,8 @@ using Microsoft.Win32;
 
 [assembly: System.Reflection.AssemblyTitle("课堂笔 ClassInk")]
 [assembly: System.Reflection.AssemblyProduct("ClassInk")]
-[assembly: System.Reflection.AssemblyVersion("1.2.0.0")]
-[assembly: System.Reflection.AssemblyFileVersion("1.2.0.0")]
+[assembly: System.Reflection.AssemblyVersion("1.3.0.0")]
+[assembly: System.Reflection.AssemblyFileVersion("1.3.0.0")]
 
 namespace ClassInk {
  public sealed class ToolIcon : FrameworkElement {
@@ -65,6 +65,7 @@ namespace ClassInk {
     case "open":path="M3,7 L3,4 8,4 10,7 17,7 M3,7 L17,7 15,17 3,17 Z";break;
     case "export":path="M4,12 L4,17 16,17 16,12 M10,3 L10,13 M6,7 L10,3 14,7";break;
     case "image":path="M3,4 L17,4 17,16 3,16 Z M3,14 L8,9 12,13 14,11 17,14 M14,7 L14.1,7";break;
+    case "zoom":path="M14,8 A6,6 0 1 1 2,8 A6,6 0 1 1 14,8 M12,12 L18,18 M5,8 L11,8 M8,5 L8,11";break;
     case "pdf":path="M5,2 L12,2 16,6 16,18 5,18 Z M12,2 L12,6 16,6 M8,10 L13,10 M8,14 L13,14";break;
     case "exit":path="M8,4 L3,4 3,17 8,17 M8,10 L18,10 M14,6 L18,10 14,14";break;
     case "settings":path="M8,3 L12,3 13,5 16,5 18,8 17,10 18,12 16,15 13,15 12,17 8,17 7,15 4,15 2,12 3,10 2,8 4,5 7,5 Z M13,10 A3,3 0 1 1 7,10 A3,3 0 1 1 13,10";break;
@@ -98,40 +99,54 @@ namespace ClassInk {
   [DllImport("user32.dll")] public static extern bool UnregisterHotKey(IntPtr h,int id);
  }
  sealed class LaserRipples : FrameworkElement {
-  sealed class Pulse {public Point Center;public double Started;}
-  Pulse pulse;
-  readonly System.Diagnostics.Stopwatch clock=System.Diagnostics.Stopwatch.StartNew();
+  readonly System.Diagnostics.Stopwatch pulseClock=new System.Diagnostics.Stopwatch();
   readonly System.Windows.Threading.DispatcherTimer animation=new System.Windows.Threading.DispatcherTimer();
-  const double Lifetime=0.42;
+  static readonly Brush ambient=Glow(0,45,68,32);
+  static readonly Brush halo=Glow(0,36,152,24);
+  static readonly Brush inner=Glow(120,220,248,180);
   Point point;
-  bool isPointing;
+  bool visible;
+  const double CycleSeconds=1.05;
+
   public LaserRipples(){
    IsHitTestVisible=false;
    animation.Interval=TimeSpan.FromMilliseconds(16);
-   animation.Tick+=(s,e)=>{
-    double now=clock.Elapsed.TotalSeconds;
-    if(pulse!=null&&now-pulse.Started>=Lifetime)pulse=null;
-    if(pulse==null)animation.Stop();
-    InvalidateVisual();
-   };
+   animation.Tick+=(s,e)=>InvalidateVisual();
   }
-  public void Click(Point location){Move(location);pulse=new Pulse{Center=location,Started=clock.Elapsed.TotalSeconds};animation.Start();}
-  public void Move(Point location){point=location;isPointing=true;InvalidateVisual();}
-  public void End(){isPointing=false;InvalidateVisual();}
-  public void Clear(){isPointing=false;pulse=null;animation.Stop();InvalidateVisual();}
+  static Brush Glow(byte center,byte middle,byte peak,byte edge){
+   var brush=new RadialGradientBrush();
+   brush.GradientStops.Add(new GradientStop(Color.FromArgb(center,255,42,57),0));
+   brush.GradientStops.Add(new GradientStop(Color.FromArgb(middle,255,42,57),0.32));
+   brush.GradientStops.Add(new GradientStop(Color.FromArgb(peak,255,42,57),0.52));
+   brush.GradientStops.Add(new GradientStop(Color.FromArgb(edge,255,42,57),0.72));
+   brush.GradientStops.Add(new GradientStop(Colors.Transparent,1));
+   brush.Freeze();
+   return brush;
+  }
+  public void Click(Point location){
+   Move(location);
+   pulseClock.Restart();
+  }
+  public void Move(Point location){
+   point=location;
+   if(!visible){visible=true;pulseClock.Restart();animation.Start();}
+   InvalidateVisual();
+  }
+  public void End(){
+   visible=false;animation.Stop();pulseClock.Stop();InvalidateVisual();
+  }
+  public void Clear(){End();}
   protected override void OnRender(DrawingContext dc){
-   double now=clock.Elapsed.TotalSeconds;
-   if(pulse!=null){
-    double age=Math.Min(1,(now-pulse.Started)/Lifetime);
-    double radius=10+25*(1-Math.Pow(1-age,2));
-    byte alpha=(byte)(160*(1-age)*(1-age));
-    var brush=new SolidColorBrush(Color.FromArgb(alpha,255,0,0));
-    dc.DrawEllipse(null,new Pen(brush,2.8-age*1.5),pulse.Center,radius,radius);
-   }
-   if(isPointing){
-    dc.DrawEllipse(null,new Pen(new SolidColorBrush(Color.FromArgb(155,255,0,0)),1.5),point,17,17);
-    dc.DrawEllipse(Brushes.Red,new Pen(Brushes.White,1.25),point,9,9);
-   }
+   if(!visible)return;
+   double phase=pulseClock.Elapsed.TotalSeconds%CycleSeconds/CycleSeconds;
+   double radius=26+37*(1-Math.Pow(1-phase,1.65));
+   dc.DrawEllipse(ambient,null,point,34,34);
+   dc.PushOpacity(1-phase*0.87);
+   dc.DrawEllipse(halo,null,point,radius,radius);
+   dc.Pop();
+   dc.DrawEllipse(inner,null,point,13,13);
+   dc.DrawEllipse(Brushes.Red,null,point,9.5,9.5);
+   dc.DrawEllipse(Brushes.MistyRose,null,point,3.6,3.6);
   }
  }
  sealed class MouseInkStroke {
@@ -317,12 +332,87 @@ namespace ClassInk {
    tile.Freeze();return tile;
   }
  }
+ sealed class ScreenView : Window {
+  readonly BitmapSource screenshot;
+  readonly InkCanvas canvas=new InkCanvas();
+  readonly Canvas overlay=new Canvas{IsHitTestVisible=false};
+  readonly System.Windows.Shapes.Rectangle selection=new System.Windows.Shapes.Rectangle{Stroke=Brushes.DeepSkyBlue,StrokeThickness=2,Fill=new SolidColorBrush(Color.FromArgb(30,30,160,255))};
+  readonly MatrixTransform transform=new MatrixTransform();
+  readonly bool crop;
+  Point start,offset,panOrigin;
+  bool dragging;
+  double scale=1;
+  public BitmapSource Result {get;private set;}
+  public ScreenView(BitmapSource screenshot,Board board,bool crop){
+   this.screenshot=screenshot;this.crop=crop;
+   Left=board.Left;Top=board.Top;Width=board.Width;Height=board.Height;
+   WindowStyle=WindowStyle.None;ResizeMode=ResizeMode.NoResize;Topmost=true;ShowInTaskbar=false;Background=Brushes.Black;
+   var viewport=new Grid{ClipToBounds=true};Content=viewport;
+   canvas.Background=new ImageBrush(screenshot){Stretch=Stretch.Fill};canvas.RenderTransform=transform;
+   canvas.DefaultDrawingAttributes=board.Ink.DefaultDrawingAttributes.Clone();canvas.DefaultDrawingAttributes.IsHighlighter=false;
+   canvas.EditingMode=crop?InkCanvasEditingMode.None:InkCanvasEditingMode.Ink;
+   viewport.Children.Add(canvas);viewport.Children.Add(overlay);overlay.Children.Add(selection);selection.Visibility=Visibility.Collapsed;
+   var tip=new Border{Background=new SolidColorBrush(Color.FromArgb(229,24,33,49)),CornerRadius=new CornerRadius(8),Padding=new Thickness(12,8,12,8),Margin=new Thickness(16),HorizontalAlignment=HorizontalAlignment.Center,VerticalAlignment=VerticalAlignment.Top,IsHitTestVisible=false};
+   tip.Child=new TextBlock{Foreground=Brushes.White,Text=crop?"拖动框选截图并贴到板书 · Esc 取消":"滚轮缩放 · 右键拖动平移 · 左键写画 · Ctrl+Z 撤销 · Esc 退出"};viewport.Children.Add(tip);
+   Loaded+=(s,e)=>{Activate();if(!crop)ZoomAt(Mouse.GetPosition(viewport),2);};
+   PreviewKeyDown+=(s,e)=>{
+    if(e.Key==Key.Escape){Close();e.Handled=true;}
+    else if(!crop&&e.Key==Key.Z&&(Keyboard.Modifiers&ModifierKeys.Control)!=0&&canvas.Strokes.Count>0){canvas.Strokes.RemoveAt(canvas.Strokes.Count-1);e.Handled=true;}
+   };
+   viewport.PreviewMouseWheel+=(s,e)=>{if(!crop){ZoomAt(e.GetPosition(viewport),scale*Math.Pow(1.25,e.Delta/120.0));e.Handled=true;}};
+   viewport.PreviewMouseDown+=(s,e)=>{
+    if(e.ChangedButton!=(crop?MouseButton.Left:MouseButton.Right))return;
+    start=e.GetPosition(viewport);panOrigin=offset;dragging=viewport.CaptureMouse();e.Handled=true;
+   };
+   viewport.LostMouseCapture+=(s,e)=>{dragging=false;};
+   viewport.PreviewMouseMove+=(s,e)=>{
+    if(!dragging)return;
+    Point point=e.GetPosition(viewport);
+    if(crop){var rect=Region(point);Canvas.SetLeft(selection,rect.X);Canvas.SetTop(selection,rect.Y);selection.Width=rect.Width;selection.Height=rect.Height;selection.Visibility=Visibility.Visible;}
+    else{offset=panOrigin+(point-start);ApplyTransform();}
+    e.Handled=true;
+   };
+   viewport.PreviewMouseUp+=(s,e)=>{
+    if(!dragging||e.ChangedButton!=(crop?MouseButton.Left:MouseButton.Right))return;
+    dragging=false;viewport.ReleaseMouseCapture();e.Handled=true;
+    if(!crop)return;
+    Rect region=Region(e.GetPosition(viewport));
+    if(region.Width<4||region.Height<4){selection.Visibility=Visibility.Collapsed;return;}
+    int x=(int)(region.Left*screenshot.PixelWidth/ActualWidth),y=(int)(region.Top*screenshot.PixelHeight/ActualHeight);
+    int right=Math.Min(screenshot.PixelWidth,(int)Math.Ceiling(region.Right*screenshot.PixelWidth/ActualWidth));
+    int bottom=Math.Min(screenshot.PixelHeight,(int)Math.Ceiling(region.Bottom*screenshot.PixelHeight/ActualHeight));
+    var bitmap=new CroppedBitmap(screenshot,new Int32Rect(x,y,right-x,bottom-y));bitmap.Freeze();Result=bitmap;Close();
+   };
+  }
+  Rect Region(Point end){return new Rect(start,new Point(Math.Max(0,Math.Min(ActualWidth,end.X)),Math.Max(0,Math.Min(ActualHeight,end.Y))));}
+  void ZoomAt(Point anchor,double requested){
+   double next=Math.Max(1,Math.Min(8,requested)),ratio=next/scale;
+   offset=anchor+(offset-anchor)*ratio;scale=next;ApplyTransform();
+  }
+  void ApplyTransform(){
+   offset=new Point(Math.Min(0,Math.Max(ActualWidth*(1-scale),offset.X)),Math.Min(0,Math.Max(ActualHeight*(1-scale),offset.Y)));
+   transform.Matrix=new Matrix(scale,0,0,scale,offset.X,offset.Y);
+   canvas.DefaultDrawingAttributes.Width=Math.Max(0.1,3/scale);canvas.DefaultDrawingAttributes.Height=canvas.DefaultDrawingAttributes.Width;
+  }
+ }
  public static class Document {
   public static string Save(Board b,bool blank=false) {
    var doc=new XmlDocument(); var root=doc.CreateElement("ClassInk"); root.SetAttribute("version","1");root.SetAttribute("white",b.White.ToString());root.SetAttribute("surface",b.Surface);doc.AppendChild(root);
    var ink=doc.CreateElement("Strokes"); using(var ms=new MemoryStream()) { (blank?new StrokeCollection():b.Ink.Strokes).Save(ms);ink.InnerText=Convert.ToBase64String(ms.ToArray()); }root.AppendChild(ink);
    if(!blank)foreach(TextBlock t in b.Ink.Children.OfType<TextBlock>()) { var n=doc.CreateElement("Text");n.SetAttribute("x",InkCanvas.GetLeft(t).ToString(CultureInfo.InvariantCulture));n.SetAttribute("y",InkCanvas.GetTop(t).ToString(CultureInfo.InvariantCulture));n.SetAttribute("size",t.FontSize.ToString(CultureInfo.InvariantCulture));n.SetAttribute("color",t.Foreground.ToString());n.InnerText=t.Text;root.AppendChild(n); }
+   if(!blank)foreach(var image in b.Ink.Children.OfType<Image>()){
+    var node=doc.CreateElement("Image");
+    foreach(var property in new[]{"x","y","width","height"}){
+     double value=property=="x"?InkCanvas.GetLeft(image):property=="y"?InkCanvas.GetTop(image):property=="width"?image.Width:image.Height;
+     node.SetAttribute(property,value.ToString(CultureInfo.InvariantCulture));
+    }
+    node.InnerText=(string)image.Tag;root.AppendChild(node);
+   }
    return doc.OuterXml;
+  }
+  internal static Image Picture(BitmapSource bitmap,string png,double x,double y,double width,double height){
+   var image=new Image{Source=bitmap,Tag=png,Width=width,Height=height,Stretch=Stretch.Fill};
+   InkCanvas.SetLeft(image,x);InkCanvas.SetTop(image,y);return image;
   }
   internal static XmlElement ReadRoot(string xml){
    var doc=new XmlDocument { XmlResolver=null }; using(var reader=XmlReader.Create(new StringReader(xml),new XmlReaderSettings { DtdProcessing=DtdProcessing.Prohibit, MaxCharactersInDocument=80000000, XmlResolver=null })) doc.Load(reader);
@@ -334,8 +424,20 @@ namespace ClassInk {
    StrokeCollection strokes; using(var ms=new MemoryStream(Convert.FromBase64String(root["Strokes"].InnerText))) strokes=new StrokeCollection(ms);
    var texts=new List<Tuple<string,double,double,string,double>>();
    foreach(XmlElement n in root.SelectNodes("Text")) { double x=Double.Parse(n.GetAttribute("x"),CultureInfo.InvariantCulture),y=Double.Parse(n.GetAttribute("y"),CultureInfo.InvariantCulture),size=Double.Parse(n.GetAttribute("size"),CultureInfo.InvariantCulture); if(Double.IsNaN(x)||Double.IsInfinity(x)||Double.IsNaN(y)||Double.IsInfinity(y)||size<1||size>500||Double.IsNaN(size)) throw new InvalidDataException("文字数据无效。"); new BrushConverter().ConvertFromString(n.GetAttribute("color")); texts.Add(Tuple.Create(n.InnerText,x,y,n.GetAttribute("color"),size)); }
+   var pictures=new List<Image>();
+   foreach(XmlElement node in root.SelectNodes("Image")){
+    var bounds=new[]{"x","y","width","height"}.Select(key=>Double.Parse(node.GetAttribute(key),CultureInfo.InvariantCulture)).ToArray();
+    if(bounds.Any(n=>Double.IsInfinity(n)||Double.IsNaN(n))||bounds[2]<=0||bounds[3]<=0)throw new InvalidDataException("截图尺寸无效。");
+    string png=node.InnerText;
+    using(var stream=new MemoryStream(Convert.FromBase64String(png))){
+     var bitmap=BitmapFrame.Create(stream,BitmapCreateOptions.None,BitmapCacheOption.OnLoad);bitmap.Freeze();
+     pictures.Add(Picture(bitmap,png,bounds[0],bounds[1],bounds[2],bounds[3]));
+    }
+   }
    if(b==null)return;
-   b.FinishText(false);b.Ink.Select(new UIElement[0]);b.Ink.Strokes=strokes; b.Ink.Children.Clear();foreach(var t in texts)b.AddText(t.Item1,t.Item2,t.Item3,t.Item4,t.Item5);
+   b.FinishText(false);b.Ink.Select(new UIElement[0]);b.Ink.Strokes=strokes; b.Ink.Children.Clear();
+   foreach(var picture in pictures)b.Ink.Children.Add(picture);
+   foreach(var t in texts)b.AddText(t.Item1,t.Item2,t.Item3,t.Item4,t.Item5);
    if(root.HasAttribute("surface"))b.SetSurface(root.GetAttribute("surface"));else b.SetWhite(root.GetAttribute("white")=="True");
   }
  }
@@ -544,7 +646,8 @@ namespace ClassInk {
   Brush ActiveFill {get{return B(themeIndex==0?"#EAF1FF":themeIndex==1?"#634E80D0":themeIndex==2?"#234C55":"#635131");}}
   Brush UiBorder {get{return B(themeIndex==0?"#DEE4EC":themeIndex==1?"#6679879C":themeIndex==2?"#416579":"#5B5C69");}}
   void ShowSettings(Button anchor){
-   var row=new StackPanel {Orientation=Orientation.Horizontal};
+   var settings=new StackPanel();
+   var row=new StackPanel {Orientation=Orientation.Horizontal};settings.Children.Add(row);
    for(int i=0;i<themeNames.Length;i++){
     int choice=i;
     var button=Button(themeNames[i],()=>{
@@ -557,9 +660,27 @@ namespace ClassInk {
     if(i==themeIndex){button.Background=ActiveFill;button.Foreground=ActiveInk;}
     row.Children.Add(button);
    }
-   row.Children.Add(Button("计时音效",()=>ShowSoundSettings(anchor)));
-   row.Children.Add(Button("文件管理",()=>ShowFileSettings(anchor)));
-   OpenFlyout(anchor,row);
+   var actions=new StackPanel{Orientation=Orientation.Horizontal};settings.Children.Add(actions);
+   actions.Children.Add(Button("计时音效",()=>ShowSoundSettings(anchor)));
+   actions.Children.Add(Button("文件管理",()=>ShowFileSettings(anchor)));
+   actions.Children.Add(Button("打赏支持",ShowSupport));
+   OpenFlyout(anchor,settings);
+  }
+  void ShowSupport(){
+   if(flyout!=null)flyout.IsOpen=false;
+   var row=new StackPanel{Orientation=Orientation.Horizontal,HorizontalAlignment=HorizontalAlignment.Center};
+   var panel=new StackPanel{Margin=new Thickness(18)};
+   panel.Children.Add(new TextBlock{Text="使用微信扫一扫，自愿支持课堂笔",FontSize=14,Foreground=UiInk,Margin=new Thickness(4,0,4,12)});
+   panel.Children.Add(row);
+   for(int i=1;i<=2;i++){
+    using(var stream=typeof(Desk).Assembly.GetManifestResourceStream("ClassInk.Support"+i+".jpg")){
+     if(stream==null)throw new InvalidOperationException("打赏图片资源缺失。");
+     var card=new Border{Background=Brushes.White,Padding=new Thickness(8),Margin=new Thickness(4)};
+     card.Child=new Image{Source=BitmapFrame.Create(stream,BitmapCreateOptions.None,BitmapCacheOption.OnLoad),Width=205,Height=205,Stretch=Stretch.Uniform};row.Children.Add(card);
+    }
+   }
+   var window=new Window{Title="打赏支持 · 课堂笔",Owner=this,ShowInTaskbar=false,Topmost=true,SizeToContent=SizeToContent.WidthAndHeight,ResizeMode=ResizeMode.NoResize,WindowStartupLocation=WindowStartupLocation.CenterScreen,Background=B(themeSurfaces[themeIndex]),Content=panel};
+   window.PreviewKeyDown+=(s,e)=>{if(e.Key==Key.Escape)window.Close();};window.ShowDialog();
   }
   void ShowSoundSettings(Button anchor){
    var panel=new StackPanel();
@@ -750,6 +871,7 @@ namespace ClassInk {
    pageButton=Button("",ShowPages);pageButton.Content=pageFace;pageButton.Height=42;panel.Children.Add(pageButton);
    visibilityButton=Button("",ToggleAnnotations);panel.Children.Add(visibilityButton);
    AddIcon("trash","一键清空 · 可撤销",ClearBoard);
+   AddChoice(new[]{"zoom","image"},new[]{"屏幕缩放 · Ctrl+1","框选截图并贴到板书"},i=>OpenScreenView(i==1),false);
    Action[] fileActions={Save,Open,Export,ExportBoard,ExportLessonPdf};
    AddChoice(new[]{"save","open","export","image","pdf"},new[]{"保存课程","打开课程","导出屏幕 PNG","导出当前板书 PNG","导出整节课 PDF"},i=>fileActions[i](),false);
    Separator();
@@ -773,13 +895,14 @@ namespace ClassInk {
     var h=new WindowInteropHelper(this).Handle;HwndSource.FromHwnd(h).AddHook(Hook);
     Native.RegisterHotKey(h,1,0x4003,0x44);Native.RegisterHotKey(h,2,0x4003,0x48);
     Native.RegisterHotKey(h,3,0x4003,0x21);Native.RegisterHotKey(h,4,0x4003,0x22);
+    if(!Native.RegisterHotKey(h,5,0x4002,0x31))ShowNotice("Ctrl+1 已被占用，可从工具栏启动缩放");
     Activate();
    };
    Closing+=(s,e)=>{if(exiting)return;e.Cancel=true;Exit();};
   }
   static ControlTemplate SoftButtonTemplate(){return (ControlTemplate)XamlReader.Parse("<ControlTemplate xmlns='http://schemas.microsoft.com/winfx/2006/xaml/presentation' TargetType='Button'><Grid><Border Background='{TemplateBinding Background}' BorderBrush='{TemplateBinding BorderBrush}' BorderThickness='{TemplateBinding BorderThickness}' CornerRadius='8'/><Border x:Name='hover' xmlns:x='http://schemas.microsoft.com/winfx/2006/xaml' Background='#0C356DE6' CornerRadius='8' Opacity='0'/><ContentPresenter HorizontalAlignment='Center' VerticalAlignment='Center' Margin='{TemplateBinding Padding}'/></Grid><ControlTemplate.Triggers><Trigger Property='IsMouseOver' Value='True'><Setter TargetName='hover' Property='Opacity' Value='1'/></Trigger><Trigger Property='IsPressed' Value='True'><Setter TargetName='hover' Property='Background' Value='#20356DE6'/></Trigger><Trigger Property='IsEnabled' Value='False'><Setter Property='Opacity' Value='0.35'/></Trigger></ControlTemplate.Triggers></ControlTemplate>");}
   static ControlTemplate SliderTemplate(){return (ControlTemplate)XamlReader.Parse("<ControlTemplate xmlns='http://schemas.microsoft.com/winfx/2006/xaml/presentation' TargetType='Slider'><Grid Height='24'><Border Height='3' Background='#E3E9F1' CornerRadius='2' Margin='5,0'/><Track Name='PART_Track' Minimum='{TemplateBinding Minimum}' Maximum='{TemplateBinding Maximum}' Value='{Binding Value, RelativeSource={RelativeSource TemplatedParent}, Mode=TwoWay}'><Track.DecreaseRepeatButton><RepeatButton Command='Slider.DecreaseLarge' Opacity='0'/></Track.DecreaseRepeatButton><Track.Thumb><Thumb Width='12' Height='12'><Thumb.Template><ControlTemplate TargetType='Thumb'><Ellipse Fill='#356DE6' Stroke='White' StrokeThickness='2'/></ControlTemplate></Thumb.Template></Thumb></Track.Thumb><Track.IncreaseRepeatButton><RepeatButton Command='Slider.IncreaseLarge' Opacity='0'/></Track.IncreaseRepeatButton></Track></Grid></ControlTemplate>");}
-  void Separator(){panel.Children.Add(new Border {Height=1,Background=B("#E4E9F0"),Margin=new Thickness(4,7,4,7),VerticalAlignment=VerticalAlignment.Center});}
+  void Separator(){panel.Children.Add(new Border {Height=1,Background=B("#E4E9F0"),Margin=new Thickness(4,4,4,4),VerticalAlignment=VerticalAlignment.Center});}
   void SetCollapsed(bool value,bool animate=true){
    if(collapsed==value&&IsLoaded&&animate)return;
    collapsed=value;if(value&&flyout!=null)flyout.IsOpen=false;double railHeight=MeasureRail();
@@ -1094,7 +1217,7 @@ namespace ClassInk {
    var image=new RenderTargetBitmap(840,480,96,96,PixelFormats.Pbgra32);image.Render(surface);var encoder=new PngBitmapEncoder();encoder.Frames.Add(BitmapFrame.Create(image));using(var f=File.Create(path))encoder.Save(f);
   }
   void Label(string text){panel.Children.Add(new TextBlock{Text=text,Foreground=B("#8896B3"),FontSize=11,Margin=new Thickness(3,12,0,6)});}
-  Button Button(string text,Action action){var b=new Button {Content=text,MinWidth=30,Height=34,Margin=new Thickness(2),Foreground=UiInk,Background=Brushes.Transparent,BorderThickness=new Thickness(0),FontSize=11,FontFamily=new FontFamily("Microsoft YaHei UI"),Cursor=Cursors.Hand,Padding=new Thickness(2)};if(text=="undo"||text=="redo")b.Content=new ToolIcon(text);b.Template=SoftButtonTemplate();b.Click+=(s,e)=>{try{action();}catch(Exception ex){MessageBox.Show(ex.Message,"课堂笔 · 操作未完成");}};return b;}
+  Button Button(string text,Action action){var b=new Button {Content=text,MinWidth=30,Height=30,Margin=new Thickness(2,1,2,1),Foreground=UiInk,Background=Brushes.Transparent,BorderThickness=new Thickness(0),FontSize=11,FontFamily=new FontFamily("Microsoft YaHei UI"),Cursor=Cursors.Hand,Padding=new Thickness(2)};if(text=="undo"||text=="redo")b.Content=new ToolIcon(text);b.Template=SoftButtonTemplate();b.Click+=(s,e)=>{try{action();}catch(Exception ex){MessageBox.Show(ex.Message,"课堂笔 · 操作未完成");}};return b;}
   void AddTool(Panel grid,string key,string text){var b=Button(text,()=>{board.SetTool(key);Refresh();});b.Content=new ToolIcon(key);b.ToolTip=text;tools[key]=b;grid.Children.Add(b);}
   void Refresh(string serialized=null){
    foreach(var group in choices){
@@ -1148,6 +1271,7 @@ namespace ClassInk {
     case 2:ToggleAnnotations();break;
     case 3:SwitchPage(pageIndex-1);break;
     case 4:SwitchPage(pageIndex+1);break;
+    case 5:OpenScreenView(false);break;
     default:return IntPtr.Zero;
    }
    handled=true;return IntPtr.Zero;
@@ -1195,6 +1319,41 @@ namespace ClassInk {
    RememberSavedLesson();
    CloseNotice();Refresh(history[index]);
   }
+  ScreenView screenView;
+  bool capturingScreen;
+  async void OpenScreenView(bool crop){
+   if(screenView!=null){if(!crop)screenView.Close();return;}
+   if(capturingScreen)return;
+   capturingScreen=true;
+   bool timerVisible=timerWindow!=null&&timerWindow.IsVisible;
+   BitmapSource pasted=null;
+   try{
+    board.FinishActiveInput();CloseNotice();if(flyout!=null)flyout.IsOpen=false;
+    Hide();board.Hide();if(timerVisible)timerWindow.Hide();
+    await System.Threading.Tasks.Task.Delay(180);
+    var bounds=System.Windows.Forms.SystemInformation.VirtualScreen;
+    BitmapSource screenshot;
+    using(var bitmap=new System.Drawing.Bitmap(bounds.Width,bounds.Height,System.Drawing.Imaging.PixelFormat.Format24bppRgb)){
+     using(var graphics=System.Drawing.Graphics.FromImage(bitmap))graphics.CopyFromScreen(bounds.Left,bounds.Top,0,0,bounds.Size);
+     using(var stream=new MemoryStream()){
+      bitmap.Save(stream,System.Drawing.Imaging.ImageFormat.Png);stream.Position=0;
+      screenshot=BitmapFrame.Create(stream,BitmapCreateOptions.None,BitmapCacheOption.OnLoad);screenshot.Freeze();
+     }
+    }
+    var view=new ScreenView(screenshot,board,crop);screenView=view;
+    view.ShowDialog();pasted=view.Result;
+   }catch(Exception error){MessageBox.Show(error.Message,"屏幕工具");}
+   finally{screenView=null;board.Show();Show();if(timerVisible&&timerWindow!=null)timerWindow.Show();capturingScreen=false;}
+   if(pasted!=null){
+    var encoder=new PngBitmapEncoder();encoder.Frames.Add(BitmapFrame.Create(pasted));
+    string data;using(var stream=new MemoryStream()){encoder.Save(stream);data=Convert.ToBase64String(stream.ToArray());}
+    double scale=Math.Min(1,Math.Min(board.Width*0.8/pasted.PixelWidth,board.Height*0.8/pasted.PixelHeight));
+    double width=pasted.PixelWidth*scale,height=pasted.PixelHeight*scale;
+    var image=Document.Picture(pasted,data,(board.Width-width)/2,(board.Height-height)/2,width,height);
+    board.Ink.Children.Insert(0,image);ActivateTool("select");board.Ink.Select(new UIElement[]{image});Commit();
+    ShowNotice("截图已贴到当前页，可移动或缩放");
+   }
+  }
   async void Export(){
    var d=new SaveFileDialog {Filter="PNG 图片|*.png",InitialDirectory=DefaultFolder(),FileName="课堂屏幕-"+DateTime.Now.ToString("yyyyMMdd-HHmmss")};if(d.ShowDialog(this)!=true)return;
    string tool=board.Tool;try { CloseNotice();Hide();board.SetTool("mouse");await System.Threading.Tasks.Task.Delay(240);
@@ -1219,7 +1378,7 @@ namespace ClassInk {
    using(var exporter=new BoardExporter())WriteFile(dialog.FileName,stream=>exporter.WritePdf(stream,CurrentLesson()));
    ShowNotice("已导出整节课 PDF");
   }
-  void Exit(){exiting=true;CloseNotice();clockTick.Stop();countdownAudio.Dispose();var handle=new WindowInteropHelper(this).Handle;for(int id=1;id<=4;id++)Native.UnregisterHotKey(handle,id);Application.Current.Shutdown();}
+  void Exit(){exiting=true;CloseNotice();clockTick.Stop();countdownAudio.Dispose();var handle=new WindowInteropHelper(this).Handle;for(int id=1;id<=5;id++)Native.UnregisterHotKey(handle,id);Application.Current.Shutdown();}
  }
  public sealed class LessonClockWindow : Window {
   readonly int[] durationParts=new int[3];
@@ -1363,6 +1522,16 @@ namespace ClassInk {
    board.AddText("算法 <演示>\n你好 & Python",32,48,"#FF123456",24);board.SetWhite(true);string xml=Document.Save(board);var copy=new Board();Document.Load(copy,xml);
    if(copy.Ink.Strokes.Count!=4||copy.Ink.Children.Count!=1||!copy.White||((TextBlock)copy.Ink.Children[0]).Text!="算法 <演示>\n你好 & Python")throw new Exception("Round trip failed");
    if(Document.Save(copy)!=xml)throw new Exception("Serialization is unstable");
+   var sample=BitmapSource.Create(2,2,96,96,PixelFormats.Bgr24,null,new byte[12],6);
+   var png=new PngBitmapEncoder();png.Frames.Add(BitmapFrame.Create(sample));
+   using(var stream=new MemoryStream()){
+    png.Save(stream);
+    copy.Ink.Children.Insert(0,Document.Picture(sample,Convert.ToBase64String(stream.ToArray()),20,30,120,80));
+   }
+   string imagePage=Document.Save(copy);Document.Load(copy,imagePage);
+   var restored=copy.Ink.Children.OfType<Image>().Single();
+   if(restored.Width!=120||InkCanvas.GetLeft(restored)!=20||Document.Save(copy)!=imagePage)throw new Exception("Screenshot did not round-trip");
+   Document.Load(copy,xml);
    copy.SetSurface("green");Document.Load(copy,Document.Save(copy));
    if(copy.Surface!="green")throw new Exception("Chalkboard background was not preserved");
    Document.Load(copy,xml.Replace(" surface=\"white\"",""));
