@@ -19,8 +19,8 @@ using Microsoft.Win32;
 
 [assembly: System.Reflection.AssemblyTitle("课堂笔 ClassInk")]
 [assembly: System.Reflection.AssemblyProduct("ClassInk")]
-[assembly: System.Reflection.AssemblyVersion("1.3.0.0")]
-[assembly: System.Reflection.AssemblyFileVersion("1.3.0.0")]
+[assembly: System.Reflection.AssemblyVersion("1.4.0.0")]
+[assembly: System.Reflection.AssemblyFileVersion("1.4.0.0")]
 
 namespace ClassInk {
  public sealed class ToolIcon : FrameworkElement {
@@ -342,6 +342,10 @@ namespace ClassInk {
   Point start,offset,panOrigin;
   bool dragging;
   double scale=1;
+  double targetScale=1, fromScale=1;
+  Point targetOffset, fromOffset;
+  readonly System.Diagnostics.Stopwatch zoomClock=new System.Diagnostics.Stopwatch();
+  readonly System.Windows.Threading.DispatcherTimer zoomTimer=new System.Windows.Threading.DispatcherTimer{Interval=TimeSpan.FromMilliseconds(16)};
   public BitmapSource Result {get;private set;}
   public ScreenView(BitmapSource screenshot,Board board,bool crop){
    this.screenshot=screenshot;this.crop=crop;
@@ -353,14 +357,34 @@ namespace ClassInk {
    canvas.EditingMode=crop?InkCanvasEditingMode.None:InkCanvasEditingMode.Ink;
    viewport.Children.Add(canvas);viewport.Children.Add(overlay);overlay.Children.Add(selection);selection.Visibility=Visibility.Collapsed;
    var tip=new Border{Background=new SolidColorBrush(Color.FromArgb(229,24,33,49)),CornerRadius=new CornerRadius(8),Padding=new Thickness(12,8,12,8),Margin=new Thickness(16),HorizontalAlignment=HorizontalAlignment.Center,VerticalAlignment=VerticalAlignment.Top,IsHitTestVisible=false};
-   tip.Child=new TextBlock{Foreground=Brushes.White,Text=crop?"拖动框选截图并贴到板书 · Esc 取消":"滚轮缩放 · 右键拖动平移 · 左键写画 · Ctrl+Z 撤销 · Esc 退出"};viewport.Children.Add(tip);
+   tip.Child=new TextBlock{Foreground=Brushes.White,Text=crop?"拖动框选截图并贴到板书 · Esc 取消":"滚轮缩放 · 右键平移 · 左键写画 · B 蓝 / R 红 / G 绿 · E 清除 · Esc 退出"};viewport.Children.Add(tip);
+   zoomTimer.Tick+=(s,e)=>{
+    double progress=Math.Min(1,zoomClock.Elapsed.TotalMilliseconds/155);
+    double eased=1-Math.Pow(1-progress,3);
+    scale=fromScale+(targetScale-fromScale)*eased;
+    offset=fromOffset+(targetOffset-fromOffset)*eased;
+    ApplyTransform();
+    if(progress>=1)zoomTimer.Stop();
+   };
+   Closed+=(s,e)=>zoomTimer.Stop();
    Loaded+=(s,e)=>{Activate();if(!crop)ZoomAt(Mouse.GetPosition(viewport),2);};
    PreviewKeyDown+=(s,e)=>{
     if(e.Key==Key.Escape){Close();e.Handled=true;}
     else if(!crop&&e.Key==Key.Z&&(Keyboard.Modifiers&ModifierKeys.Control)!=0&&canvas.Strokes.Count>0){canvas.Strokes.RemoveAt(canvas.Strokes.Count-1);e.Handled=true;}
+    else if(!crop&&Keyboard.Modifiers==ModifierKeys.None){
+     switch(e.Key){
+      case Key.B:canvas.DefaultDrawingAttributes.Color=Colors.DodgerBlue;break;
+      case Key.R:canvas.DefaultDrawingAttributes.Color=Colors.Red;break;
+      case Key.G:canvas.DefaultDrawingAttributes.Color=Colors.LimeGreen;break;
+      case Key.E:canvas.Strokes.Clear();break;
+      default:return;
+     }
+     e.Handled=true;
+    }
    };
-   viewport.PreviewMouseWheel+=(s,e)=>{if(!crop){ZoomAt(e.GetPosition(viewport),scale*Math.Pow(1.25,e.Delta/120.0));e.Handled=true;}};
+   viewport.PreviewMouseWheel+=(s,e)=>{if(!crop&&!dragging&&Mouse.LeftButton!=MouseButtonState.Pressed){ZoomAt(e.GetPosition(viewport),targetScale*Math.Pow(1.25,e.Delta/120.0));e.Handled=true;}};
    viewport.PreviewMouseDown+=(s,e)=>{
+    zoomTimer.Stop();targetScale=scale;
     if(e.ChangedButton!=(crop?MouseButton.Left:MouseButton.Right))return;
     start=e.GetPosition(viewport);panOrigin=offset;dragging=viewport.CaptureMouse();e.Handled=true;
    };
@@ -387,7 +411,10 @@ namespace ClassInk {
   Rect Region(Point end){return new Rect(start,new Point(Math.Max(0,Math.Min(ActualWidth,end.X)),Math.Max(0,Math.Min(ActualHeight,end.Y))));}
   void ZoomAt(Point anchor,double requested){
    double next=Math.Max(1,Math.Min(8,requested)),ratio=next/scale;
-   offset=anchor+(offset-anchor)*ratio;scale=next;ApplyTransform();
+   fromScale=scale;fromOffset=offset;targetScale=next;
+   var requestedOffset=anchor+(offset-anchor)*ratio;
+   targetOffset=new Point(Math.Min(0,Math.Max(ActualWidth*(1-next),requestedOffset.X)),Math.Min(0,Math.Max(ActualHeight*(1-next),requestedOffset.Y)));
+   zoomClock.Restart();zoomTimer.Start();
   }
   void ApplyTransform(){
    offset=new Point(Math.Min(0,Math.Max(ActualWidth*(1-scale),offset.X)),Math.Min(0,Math.Max(ActualHeight*(1-scale),offset.Y)));
@@ -664,7 +691,50 @@ namespace ClassInk {
    actions.Children.Add(Button("计时音效",()=>ShowSoundSettings(anchor)));
    actions.Children.Add(Button("文件管理",()=>ShowFileSettings(anchor)));
    actions.Children.Add(Button("打赏支持",ShowSupport));
+   actions.Children.Add(Button("快捷键",ShowShortcuts));
    OpenFlyout(anchor,settings);
+  }
+  sealed class Shortcut {
+   public uint Key;public string Label,Description;public Action Run;
+   public Shortcut(uint key,string label,string description,Action run){Key=key;Label=label;Description=description;Run=run;}
+  }
+  Shortcut[] shortcuts;
+  readonly HashSet<int> registeredShortcuts=new HashSet<int>();
+  Shortcut[] CreateShortcuts(){return new[]{
+   new Shortcut(0x44,"D","鼠标 / 画笔",()=>ActivateTool(board.Tool=="mouse"?"pen":"mouse")),
+   new Shortcut(0x48,"H","隐藏 / 恢复板书",ToggleAnnotations),
+   new Shortcut(0x21,"PageUp","上一页",()=>SwitchPage(pageIndex-1)),
+   new Shortcut(0x22,"PageDown","下一页",()=>SwitchPage(pageIndex+1)),
+   new Shortcut(0x31,"1","屏幕缩放 / 退出缩放",()=>OpenScreenView(false)),
+   new Shortcut(0x50,"P","画笔",()=>ActivateTool("pen")),
+   new Shortcut(0x4C,"L","激光笔",()=>ActivateTool("laser")),
+   new Shortcut(0x4D,"M","荧光笔",()=>ActivateTool("highlight")),
+   new Shortcut(0x41,"A","箭头",()=>ActivateTool("arrow")),
+   new Shortcut(0x52,"R","矩形",()=>ActivateTool("rect")),
+   new Shortcut(0x54,"T","文字",()=>ActivateTool("text")),
+   new Shortcut(0x56,"V","选择 / 移动",()=>ActivateTool("select")),
+   new Shortcut(0x45,"E","橡皮擦",()=>ActivateTool("erase")),
+   new Shortcut(0x57,"W","切换板面",()=>{board.SetSurface(boardSurfaces[(Array.IndexOf(boardSurfaces,board.Surface)+1)%boardSurfaces.Length]);Commit();}),
+   new Shortcut(0x43,"C","框选截图贴到板书",()=>OpenScreenView(true)),
+   new Shortcut(0x53,"S","保存课程",Save),
+   new Shortcut(0x4F,"O","打开课程",Open),
+   new Shortcut(0x4E,"N","新建板书页",NewPage),
+   new Shortcut(0x5A,"Z","撤销",()=>Travel(-1)),
+   new Shortcut(0x59,"Y","重做",()=>Travel(1)),
+   new Shortcut(0x4B,"K","打开计时器",ShowClock)
+  };}
+  void ShowShortcuts(){
+   if(flyout!=null)flyout.IsOpen=false;
+   var rows=new StackPanel{Margin=new Thickness(18)};
+   rows.Children.Add(new TextBlock{Text="课堂笔快捷键",FontSize=19,FontWeight=FontWeights.SemiBold,Foreground=UiInk,Margin=new Thickness(0,0,0,10)});
+   for(int i=0;i<shortcuts.Length;i++){
+    var item=shortcuts[i];
+    string keys=(i==4?"Ctrl + ":"Ctrl + Alt + ")+item.Label;
+    rows.Children.Add(new TextBlock{Text=keys+"    "+item.Description+(registeredShortcuts.Contains(i+1)?"":"  （未注册）"),Foreground=UiInk,Margin=new Thickness(0,3,0,3)});
+   }
+   rows.Children.Add(new TextBlock{Text="缩放中：B 蓝笔 · R 红笔 · G 绿笔 · E 清空临时笔迹\nCtrl+Z 撤销 · Esc 退出缩放",Foreground=ActiveInk,Margin=new Thickness(0,12,0,0)});
+   var dialog=new Window{Title="快捷键说明",Owner=this,ShowInTaskbar=false,Topmost=true,Width=470,Height=Math.Min(640,SystemParameters.WorkArea.Height-50),WindowStartupLocation=WindowStartupLocation.CenterScreen,Background=B(themeSurfaces[themeIndex]),Content=new ScrollViewer{Content=rows,VerticalScrollBarVisibility=ScrollBarVisibility.Auto}};
+   dialog.PreviewKeyDown+=(s,e)=>{if(e.Key==Key.Escape)dialog.Close();};dialog.ShowDialog();
   }
   void ShowSupport(){
    if(flyout!=null)flyout.IsOpen=false;
@@ -756,7 +826,7 @@ namespace ClassInk {
   sealed class ChoiceGroup {
    public string[] Icons,Names;public int Index;public Button Main;public Action<int> Apply;public bool Immediate;public Desk Desk;
    public void Step(int delta){Index=(Index+delta+Icons.Length)%Icons.Length;if(Immediate)Apply(Index);Refresh();}
-   public void Refresh(){Main.Content=new ToolIcon(Icons[Index]);Main.ToolTip=Names[Index]+" · 点击或右键展开选项";bool active=Immediate&&Desk.board.Tool==Icons[Index];Main.Background=active?Desk.ActiveFill:Brushes.Transparent;Main.Foreground=active?Desk.ActiveInk:Desk.UiInk;}
+   public void Refresh(){Main.Content=new ToolIcon(Icons[Index]);Main.ToolTip=Names[Index]+" · 滚轮切换 · 右键展开";bool active=Immediate&&Desk.board.Tool==Icons[Index];Main.Background=active?Desk.ActiveFill:Brushes.Transparent;Main.Foreground=active?Desk.ActiveInk:Desk.UiInk;}
   }
   void ActivateTool(string tool){board.SetTool(tool);Refresh();}
   Button ArrowButton(bool next,Action action){var b=Button("",action);b.Content=new ToolIcon(next?"next":"prev"){Width=10,Height=10};b.MinWidth=0;b.Width=10;b.Margin=new Thickness(0);b.Padding=new Thickness(0);b.ToolTip=next?"下一项":"上一项";return b;}
@@ -793,6 +863,14 @@ namespace ClassInk {
   void OpenFlyout(UIElement anchor,FrameworkElement content){
    if(flyout!=null)flyout.IsOpen=false;
    var frame=FlyoutFrame(content);
+   frame.PreviewMouseWheel+=(s,e)=>{
+    var element=anchor as FrameworkElement;
+    if(element==null)return;
+    var point=e.GetPosition(element);
+    if(!new Rect(element.RenderSize).Contains(point))return;
+    var forwarded=new MouseWheelEventArgs(e.MouseDevice,e.Timestamp,e.Delta){RoutedEvent=Mouse.MouseWheelEvent};
+    element.RaiseEvent(forwarded);e.Handled=forwarded.Handled;
+   };
    var slide=new TranslateTransform();frame.RenderTransform=slide;
    flyout=new Popup {PlacementTarget=anchor,Placement=PlacementMode.Right,HorizontalOffset=8,AllowsTransparency=true,StaysOpen=false,Child=frame};
    flyout.Opened+=(s,e)=>{
@@ -813,19 +891,27 @@ namespace ClassInk {
   void ShowChoice(ChoiceGroup group){if(flyout!=null&&flyout.IsOpen&&flyout.PlacementTarget==group.Main)return;OpenFlyout(group.Main,ChoicePanel(group));}
   void AddChoice(string[] icons,string[] names,Action<int> apply,bool immediate,int initial=0){
    var group=new ChoiceGroup{Icons=icons,Names=names,Apply=apply,Immediate=immediate,Index=initial,Desk=this};choices.Add(group);
-   var row=new Grid();group.Main=Button("",()=>ShowChoice(group));group.Main.MinWidth=30;row.Children.Add(group.Main);
+   bool actionGroup=icons[0]=="zoom"||icons[0]=="save";
+   bool wheelSelected=false;
+   var row=new Grid();group.Main=Button("",()=>{if(actionGroup&&wheelSelected){wheelSelected=false;group.Apply(group.Index);}else ShowChoice(group);});group.Main.MinWidth=30;row.Children.Add(group.Main);
    row.Children.Add(new TextBlock{Text="›",FontSize=10,Foreground=B("#94A3B8"),HorizontalAlignment=HorizontalAlignment.Right,VerticalAlignment=VerticalAlignment.Bottom,Margin=new Thickness(0,0,3,4),IsHitTestVisible=false});
    group.Main.MouseRightButtonUp+=(s,e)=>{ShowChoice(group);e.Handled=true;};
-   if(icons[0]=="thin"){
-    group.Main.MouseWheel+=(s,e)=>{
-     if(board.Tool!="pen"&&board.Tool!="highlight")return;
-     group.Step(Math.Sign(e.Delta));e.Handled=true;
-    };
-   }else{
+   if(icons[0]!="thin"){
     var hover=new System.Windows.Threading.DispatcherTimer {Interval=TimeSpan.FromMilliseconds(180)};
     hover.Tick+=(s,e)=>{hover.Stop();if(IsLoaded&&!collapsed&&group.Main.IsMouseOver)ShowChoice(group);};
     group.Main.MouseEnter+=(s,e)=>hover.Start();group.Main.MouseLeave+=(s,e)=>hover.Stop();
    }
+   group.Main.MouseWheel+=(s,e)=>{
+    if(icons[0]=="thin"&&board.Tool!="pen"&&board.Tool!="highlight")return;
+    if(flyout!=null&&flyout.PlacementTarget==group.Main)flyout.IsOpen=false;
+    if(icons[0]=="screen"){
+     group.Index=(group.Index+Math.Sign(e.Delta)+icons.Length)%icons.Length;
+     group.Apply(group.Index);group.Refresh();
+    }else group.Step(Math.Sign(e.Delta));
+    wheelSelected=actionGroup;
+    if(actionGroup)ShowNotice(group.Names[group.Index]+" · 点击执行");
+    e.Handled=true;
+   };
    group.Main.PreviewKeyDown+=(s,e)=>{if(e.Key==Key.Left||e.Key==Key.Right){group.Step(e.Key==Key.Left?-1:1);ShowChoice(group);e.Handled=true;}};
    panel.Children.Add(row);group.Refresh();
   }
@@ -861,6 +947,7 @@ namespace ClassInk {
    AddChoice(new[]{"text","select"},new[]{"文字","选择 / 移动"},i=>ActivateTool(i==0?"text":"select"),true);
    Separator();
    customColor=Button("",ShowPalette);customColor.Content=new ToolIcon("custom");customColor.Background=new SolidColorBrush(board.Color);customColor.ToolTip="展开颜色面板";panel.Children.Add(customColor);
+   customColor.MouseWheel+=(s,e)=>{CycleColor(Math.Sign(e.Delta));e.Handled=true;};
    var widths=new[]{2.0,4.0,6.0,10.0,16.0};
    AddChoice(new[]{"thin","medium","bold","thick","heavy"},widths.Select(width=>width+" px · 滚轮调节").ToArray(),i=>{board.Size=widths[i];board.ApplyPen();},true,1);
    Separator();
@@ -893,9 +980,9 @@ namespace ClassInk {
     string initial=Document.Save(board);history.Add(initial);RememberSavedLesson();
     board.Changed=Commit;Refresh(initial);
     var h=new WindowInteropHelper(this).Handle;HwndSource.FromHwnd(h).AddHook(Hook);
-    Native.RegisterHotKey(h,1,0x4003,0x44);Native.RegisterHotKey(h,2,0x4003,0x48);
-    Native.RegisterHotKey(h,3,0x4003,0x21);Native.RegisterHotKey(h,4,0x4003,0x22);
-    if(!Native.RegisterHotKey(h,5,0x4002,0x31))ShowNotice("Ctrl+1 已被占用，可从工具栏启动缩放");
+    shortcuts=CreateShortcuts();
+    for(int i=0;i<shortcuts.Length;i++)if(Native.RegisterHotKey(h,i+1,i==4?0x4002u:0x4003u,shortcuts[i].Key))registeredShortcuts.Add(i+1);
+    if(!registeredShortcuts.Contains(5))ShowNotice("Ctrl+1 已被占用，可从工具栏启动缩放");
     Activate();
    };
    Closing+=(s,e)=>{if(exiting)return;e.Cancel=true;Exit();};
@@ -1266,15 +1353,12 @@ namespace ClassInk {
   }
   IntPtr Hook(IntPtr h,int msg,IntPtr w,IntPtr l,ref bool handled){
    if(msg!=0x312)return IntPtr.Zero;
-   switch(w.ToInt32()){
-    case 1:ActivateTool(board.Tool=="mouse"?"pen":"mouse");break;
-    case 2:ToggleAnnotations();break;
-    case 3:SwitchPage(pageIndex-1);break;
-    case 4:SwitchPage(pageIndex+1);break;
-    case 5:OpenScreenView(false);break;
-    default:return IntPtr.Zero;
-   }
-   handled=true;return IntPtr.Zero;
+   int id=w.ToInt32();
+   if(!registeredShortcuts.Contains(id))return IntPtr.Zero;
+   handled=true;
+   if(!IsEnabled||capturingScreen&&(screenView==null||id!=5))return IntPtr.Zero;
+   try{shortcuts[id-1].Run();}catch(Exception error){MessageBox.Show(error.Message,"课堂笔 · 快捷键");}
+   return IntPtr.Zero;
   }
   bool Confirm(){
    board.FinishActiveInput();
@@ -1378,7 +1462,7 @@ namespace ClassInk {
    using(var exporter=new BoardExporter())WriteFile(dialog.FileName,stream=>exporter.WritePdf(stream,CurrentLesson()));
    ShowNotice("已导出整节课 PDF");
   }
-  void Exit(){exiting=true;CloseNotice();clockTick.Stop();countdownAudio.Dispose();var handle=new WindowInteropHelper(this).Handle;for(int id=1;id<=5;id++)Native.UnregisterHotKey(handle,id);Application.Current.Shutdown();}
+  void Exit(){exiting=true;CloseNotice();clockTick.Stop();countdownAudio.Dispose();var handle=new WindowInteropHelper(this).Handle;foreach(int id in registeredShortcuts)Native.UnregisterHotKey(handle,id);Application.Current.Shutdown();}
  }
  public sealed class LessonClockWindow : Window {
   readonly int[] durationParts=new int[3];
