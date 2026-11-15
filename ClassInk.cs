@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.IO;
 using System.Linq;
 using System.Collections.Generic;
@@ -19,8 +19,8 @@ using Microsoft.Win32;
 
 [assembly: System.Reflection.AssemblyTitle("课堂笔 ClassInk")]
 [assembly: System.Reflection.AssemblyProduct("ClassInk")]
-[assembly: System.Reflection.AssemblyVersion("1.4.1.0")]
-[assembly: System.Reflection.AssemblyFileVersion("1.4.1.0")]
+[assembly: System.Reflection.AssemblyVersion("1.5.0.0")]
+[assembly: System.Reflection.AssemblyFileVersion("1.5.0.0")]
 
 namespace ClassInk {
  public sealed class ToolIcon : FrameworkElement {
@@ -966,6 +966,7 @@ namespace ClassInk {
    AddChoice(new[]{"save","open","export","image","pdf"},new[]{"保存课程","打开课程","导出屏幕 PNG","导出当前板书 PNG","导出整节课 PDF"},i=>fileActions[i](),false);
    Separator();
    clockText=new TextBlock {Text="00:00",FontFamily=new FontFamily("Consolas"),FontSize=10,HorizontalAlignment=HorizontalAlignment.Center};
+   var lotteryButton=Button("",ShowLottery);lotteryButton.Content=new TextBlock{Text="☸",FontSize=23};lotteryButton.ToolTip="抽奖大转盘";panel.Children.Add(lotteryButton);
    var clockFace=new StackPanel {Orientation=Orientation.Vertical};clockFace.Children.Add(new ToolIcon("clock"){HorizontalAlignment=HorizontalAlignment.Center});clockFace.Children.Add(clockText);
    clockButton=Button("",ShowClock);clockButton.Content=clockFace;clockButton.ToolTip="左键打开计时器 · 右键选择预设";clockButton.Height=44;panel.Children.Add(clockButton);
    clockButton.MouseRightButtonUp+=(s,e)=>{ShowPresets();e.Handled=true;};
@@ -1148,6 +1149,40 @@ namespace ClassInk {
    if(timerWindow!=null)timerWindow.SetDuration(duration);
    ConfigureClock(true,duration,false);
    if(IsLoaded)ShowClock();
+  }
+  Window lottery;
+  void ShowLottery(){
+   if(lottery!=null){lottery.Activate();return;}
+   var w=new Window{Title="抽奖大转盘",Width=440,Height=650,Background=Brushes.White,FontFamily=new FontFamily("Microsoft YaHei UI"),Topmost=true,WindowStartupLocation=WindowStartupLocation.CenterScreen};lottery=w;
+   var root=new StackPanel{Margin=new Thickness(24)};w.Content=root;
+   root.Children.Add(new TextBlock{Text="幸运大转盘",FontSize=26,FontWeight=FontWeights.Bold,HorizontalAlignment=HorizontalAlignment.Center,Margin=new Thickness(0,0,0,18)});
+   var input=new TextBox{Text="一等奖\n二等奖\n三等奖\n谢谢参与",AcceptsReturn=true,Height=120,VerticalScrollBarVisibility=ScrollBarVisibility.Auto};var editor=new Expander{Header="编辑奖项 · 每行一项",Content=input,Margin=new Thickness(0,0,0,10)};root.Children.Add(editor);
+   root.Children.Add(new TextBlock{Text="▼",FontSize=26,Foreground=B("#FF526B"),HorizontalAlignment=HorizontalAlignment.Center});
+   var canvas=new Canvas{Width=300,Height=300};root.Children.Add(canvas);
+   var rotate=new RotateTransform(0,150,150);canvas.RenderTransform=rotate;
+   var result=new TextBlock{Text="准备抽奖",FontSize=24,FontWeight=FontWeights.Bold,Foreground=B("#243047"),TextAlignment=TextAlignment.Center,Margin=new Thickness(0,16,0,16),TextWrapping=TextWrapping.Wrap};root.Children.Add(result);
+   var start=new Button{Content="开始抽奖",Height=46,Background=B("#FF526B"),Foreground=Brushes.White,BorderThickness=new Thickness(0),FontSize=17,FontWeight=FontWeights.Bold};root.Children.Add(start);
+   string[] items=null;Action draw=()=>{
+    items=input.Text.Split(new[]{'\r','\n'},StringSplitOptions.RemoveEmptyEntries).Select(x=>x.Trim()).Where(x=>x.Length>0).ToArray();canvas.Children.Clear();rotate.Angle=0;
+    start.IsEnabled=items.Length>=2&&items.Length<=24&&items.All(x=>x.Length<=30);if(!start.IsEnabled){result.Text="需 2–24 项，每项最多 30 字";return;}result.Text="准备抽奖";
+    for(int i=0;i<items.Length;i++){
+     double a=(-90+i*360.0/items.Length)*Math.PI/180,b=(-90+(i+1)*360.0/items.Length)*Math.PI/180;
+     var f=new PathFigure{StartPoint=new Point(150,150),IsClosed=true};f.Segments.Add(new LineSegment(new Point(150+145*Math.Cos(a),150+145*Math.Sin(a)),true));f.Segments.Add(new ArcSegment(new Point(150+145*Math.Cos(b),150+145*Math.Sin(b)),new Size(145,145),0,false,SweepDirection.Clockwise,true));
+     canvas.Children.Add(new System.Windows.Shapes.Path{Data=new PathGeometry(new[]{f}),Fill=B(new[]{"#FF7187","#FFD45C","#55DCC3","#6EC8FF","#B49AFF","#FFA968"}[i%6]),Stroke=Brushes.White,StrokeThickness=3});
+     var label=new TextBlock{Text=items[i],Width=95,FontSize=12,FontWeight=FontWeights.SemiBold,TextAlignment=TextAlignment.Center,TextTrimming=TextTrimming.CharacterEllipsis,Foreground=B("#243047"),ToolTip=items[i],RenderTransform=new RotateTransform((-90+(i+0.5)*360.0/items.Length),47.5,8)};Canvas.SetLeft(label,102.5+95*Math.Cos((a+b)/2));Canvas.SetTop(label,140+95*Math.Sin((a+b)/2));canvas.Children.Add(label);
+    }
+   };
+   var timer=new System.Windows.Threading.DispatcherTimer{Interval=TimeSpan.FromMilliseconds(16)};var watch=new System.Diagnostics.Stopwatch();double target=0,nextSound=0,jumpFrom=0;int winner=0;bool jumping=false;var audio=new CountdownAudio();var mute=new CheckBox{Content="音效",IsChecked=true,HorizontalAlignment=HorizontalAlignment.Center,Margin=new Thickness(0,12,0,0)};root.Children.Add(mute);Func<int,int> pick=count=>{using(var rng=System.Security.Cryptography.RandomNumberGenerator.Create()){var bytes=new byte[4];uint v,limit=uint.MaxValue-uint.MaxValue%(uint)count;do{rng.GetBytes(bytes);v=BitConverter.ToUInt32(bytes,0);}while(v>=limit);return (int)(v%(uint)count);}};
+   timer.Tick+=(s,e)=>{
+    double elapsed=watch.Elapsed.TotalSeconds,t=Math.Min(1,elapsed/(jumping?0.42:4));
+    rotate.Angle=jumping?jumpFrom+(target-jumpFrom)*(1-Math.Pow(1-t,3)):target*(1-Math.Pow(1-t,3));
+    if(!jumping&&elapsed>=nextSound){if(mute.IsChecked==true)audio.Play(2,false);nextSound=elapsed+0.42-0.34*t;}
+    if(t<1)return;
+    if(!jumping){jumping=true;jumpFrom=target;winner=(winner+1+pick(items.Length-1))%items.Length;double desired=360-(winner+0.5)*360/items.Length;target=jumpFrom+((desired-jumpFrom%360+360)%360);result.Text="幸运跳转…";watch.Restart();return;}
+    timer.Stop();if(mute.IsChecked==true)audio.Play(0,true);result.Text="中奖："+items[winner];input.IsEnabled=true;start.IsEnabled=true;start.Content="再抽一次";
+   };
+   start.Click+=(s,e)=>{draw();if(!start.IsEnabled)return;winner=pick(items.Length);target=2160-(winner+0.5)*360/items.Length;jumping=false;nextSound=0;editor.IsExpanded=false;input.IsEnabled=false;start.IsEnabled=false;result.Text="好运转动中…";watch.Restart();timer.Start();};
+   input.TextChanged+=(s,e)=>draw();w.Closed+=(s,e)=>{timer.Stop();audio.Dispose();lottery=null;};draw();w.Show();
   }
   void ShowClock(){
    board.FinishText();if(flyout!=null)flyout.IsOpen=false;

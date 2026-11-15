@@ -1,0 +1,38 @@
+name: Windows release
+on:
+  push:
+    branches: [main]
+    paths: ['ClassInk.cs', 'build.ps1', '.github/workflows/windows.yml']
+  workflow_dispatch:
+permissions:
+  contents: write
+concurrency:
+  group: windows-release
+  cancel-in-progress: false
+jobs:
+  release:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build and self-test
+        shell: pwsh
+        run: |
+          ./build.ps1
+          $p = Start-Process ./dist/ClassInk.exe -ArgumentList '--self-test' -Wait -PassThru
+          if ($p.ExitCode -ne 0) { throw 'Self-test failed' }
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ClassInk-Windows
+          path: dist/ClassInk.exe
+      - name: Publish v1.5.0
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release view v1.5.0 --repo $env:GITHUB_REPOSITORY
+          if ($LASTEXITCODE -ne 0) {
+            gh release create v1.5.0 --target $env:GITHUB_SHA --title 'ClassInk v1.5.0 · 幸运大转盘' --notes 'Windows 新增明亮六色抽奖转盘、自定义奖项、加速音效及最终随机跳转。macOS 预览版不包含抽奖功能。' --repo $env:GITHUB_REPOSITORY
+            if ($LASTEXITCODE -ne 0) { throw 'Release creation failed' }
+          }
+          gh release upload v1.5.0 ./dist/ClassInk.exe --clobber --repo $env:GITHUB_REPOSITORY
+          if ($LASTEXITCODE -ne 0) { throw 'Release upload failed' }
