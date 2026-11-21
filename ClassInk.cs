@@ -19,8 +19,8 @@ using Microsoft.Win32;
 
 [assembly: System.Reflection.AssemblyTitle("课堂笔 ClassInk")]
 [assembly: System.Reflection.AssemblyProduct("ClassInk")]
-[assembly: System.Reflection.AssemblyVersion("1.5.0.0")]
-[assembly: System.Reflection.AssemblyFileVersion("1.5.0.0")]
+[assembly: System.Reflection.AssemblyVersion("1.6.0.0")]
+[assembly: System.Reflection.AssemblyFileVersion("1.6.0.0")]
 
 namespace ClassInk {
  public sealed class ToolIcon : FrameworkElement {
@@ -65,6 +65,11 @@ namespace ClassInk {
     case "open":path="M3,7 L3,4 8,4 10,7 17,7 M3,7 L17,7 15,17 3,17 Z";break;
     case "export":path="M4,12 L4,17 16,17 16,12 M10,3 L10,13 M6,7 L10,3 14,7";break;
     case "image":path="M3,4 L17,4 17,16 3,16 Z M3,14 L8,9 12,13 14,11 17,14 M14,7 L14.1,7";break;
+    case "lens-small":case "lens-medium":case "lens-large":case "lens-xl":case "lens-xxl":
+     double frameWidth=name=="lens-small"?10:name=="lens-medium"?12:name=="lens-large"?14:name=="lens-xl"?16:18;
+     dc.DrawRoundedRectangle(null,new Pen(brush,1.5),new Rect(10-frameWidth/2,10-frameWidth/3,frameWidth,frameWidth*2/3),2,2);
+     dc.DrawLine(new Pen(brush,1.3),new Point(7,10),new Point(13,10));dc.DrawLine(new Pen(brush,1.3),new Point(10,7),new Point(10,13));return;
+    case "lens":path="M3,3 L17,3 Q19,3 19,5 L19,15 Q19,17 17,17 L3,17 Q1,17 1,15 L1,5 Q1,3 3,3 M6,10 L14,10 M10,6 L10,14";break;
     case "zoom":path="M14,8 A6,6 0 1 1 2,8 A6,6 0 1 1 14,8 M12,12 L18,18 M5,8 L11,8 M8,5 L8,11";break;
     case "pdf":path="M5,2 L12,2 16,6 16,18 5,18 Z M12,2 L12,6 16,6 M8,10 L13,10 M8,14 L13,14";break;
     case "exit":path="M8,4 L3,4 3,17 8,17 M8,10 L18,10 M14,6 L18,10 14,14";break;
@@ -340,6 +345,7 @@ namespace ClassInk {
   readonly MatrixTransform transform=new MatrixTransform();
   readonly bool crop;
   Point start,offset,panOrigin;
+  MouseButton panButton;
   bool dragging;
   double scale=1;
   double targetScale=1, fromScale=1;
@@ -347,17 +353,18 @@ namespace ClassInk {
   readonly System.Diagnostics.Stopwatch zoomClock=new System.Diagnostics.Stopwatch();
   readonly System.Windows.Threading.DispatcherTimer zoomTimer=new System.Windows.Threading.DispatcherTimer{Interval=TimeSpan.FromMilliseconds(16)};
   public BitmapSource Result {get;private set;}
-  public ScreenView(BitmapSource screenshot,Board board,bool crop){
+  public ScreenView(BitmapSource screenshot,Board board,bool crop,bool local=false,int lensSize=2){
    this.screenshot=screenshot;this.crop=crop;
    Left=board.Left;Top=board.Top;Width=board.Width;Height=board.Height;
    WindowStyle=WindowStyle.None;ResizeMode=ResizeMode.NoResize;Topmost=true;ShowInTaskbar=false;Background=Brushes.Black;
-   var viewport=new Grid{ClipToBounds=true};Content=viewport;
+   if(local){BuildLens(lensSize);return;}
+   var viewport=new Grid{ClipToBounds=true,Background=Brushes.Transparent};Content=viewport;
    canvas.Background=new ImageBrush(screenshot){Stretch=Stretch.Fill};canvas.RenderTransform=transform;
    canvas.DefaultDrawingAttributes=board.Ink.DefaultDrawingAttributes.Clone();canvas.DefaultDrawingAttributes.IsHighlighter=false;
    canvas.EditingMode=crop?InkCanvasEditingMode.None:InkCanvasEditingMode.Ink;
    viewport.Children.Add(canvas);viewport.Children.Add(overlay);overlay.Children.Add(selection);selection.Visibility=Visibility.Collapsed;
    var tip=new Border{Background=new SolidColorBrush(Color.FromArgb(229,24,33,49)),CornerRadius=new CornerRadius(8),Padding=new Thickness(12,8,12,8),Margin=new Thickness(16),HorizontalAlignment=HorizontalAlignment.Center,VerticalAlignment=VerticalAlignment.Top,IsHitTestVisible=false};
-   tip.Child=new TextBlock{Foreground=Brushes.White,Text=crop?"拖动框选截图并贴到板书 · Esc 取消":"滚轮缩放 · 右键平移 · 左键写画 · B 蓝 / R 红 / G 绿 · E 清除 · Esc 退出"};viewport.Children.Add(tip);
+   tip.Child=new TextBlock{Foreground=Brushes.White,Text=crop?"拖动框选截图并贴到板书 · Esc 取消":"滚轮缩放 · 右键 / 中键拖动平移 · 空格+左键平移 · 左键写画 · B 蓝 / R 红 / G 绿 · E 清除 · Esc 退出"};viewport.Children.Add(tip);
    zoomTimer.Tick+=(s,e)=>{
     double progress=Math.Min(1,zoomClock.Elapsed.TotalMilliseconds/155);
     double eased=1-Math.Pow(1-progress,3);
@@ -385,10 +392,18 @@ namespace ClassInk {
    viewport.PreviewMouseWheel+=(s,e)=>{if(!crop&&!dragging&&Mouse.LeftButton!=MouseButtonState.Pressed){ZoomAt(e.GetPosition(viewport),targetScale*Math.Pow(1.25,e.Delta/120.0));e.Handled=true;}};
    viewport.PreviewMouseDown+=(s,e)=>{
     zoomTimer.Stop();targetScale=scale;
-    if(e.ChangedButton!=(crop?MouseButton.Left:MouseButton.Right))return;
-    start=e.GetPosition(viewport);panOrigin=offset;dragging=viewport.CaptureMouse();e.Handled=true;
+    bool pan=crop?e.ChangedButton==MouseButton.Left:e.ChangedButton==MouseButton.Right||e.ChangedButton==MouseButton.Middle||(e.ChangedButton==MouseButton.Left&&Keyboard.IsKeyDown(Key.Space));
+    if(!pan||dragging)return;
+    canvas.EditingMode=InkCanvasEditingMode.None;panButton=e.ChangedButton;
+    start=e.GetPosition(viewport);panOrigin=offset;dragging=Mouse.Capture(viewport,CaptureMode.Element);
+    if(!dragging)canvas.EditingMode=crop?InkCanvasEditingMode.None:InkCanvasEditingMode.Ink;else viewport.Cursor=Cursors.SizeAll;e.Handled=true;
    };
-   viewport.LostMouseCapture+=(s,e)=>{dragging=false;};
+   viewport.LostMouseCapture+=(s,e)=>{
+    // Capture-loss events from child controls bubble through the viewport too.
+    if(e.OriginalSource!=viewport)return;
+    dragging=false;viewport.Cursor=null;
+    canvas.EditingMode=crop?InkCanvasEditingMode.None:InkCanvasEditingMode.Ink;
+   };
    viewport.PreviewMouseMove+=(s,e)=>{
     if(!dragging)return;
     Point point=e.GetPosition(viewport);
@@ -397,7 +412,7 @@ namespace ClassInk {
     e.Handled=true;
    };
    viewport.PreviewMouseUp+=(s,e)=>{
-    if(!dragging||e.ChangedButton!=(crop?MouseButton.Left:MouseButton.Right))return;
+    if(!dragging||e.ChangedButton!=panButton)return;
     dragging=false;viewport.ReleaseMouseCapture();e.Handled=true;
     if(!crop)return;
     Rect region=Region(e.GetPosition(viewport));
@@ -407,6 +422,43 @@ namespace ClassInk {
     int bottom=Math.Min(screenshot.PixelHeight,(int)Math.Ceiling(region.Bottom*screenshot.PixelHeight/ActualHeight));
     var bitmap=new CroppedBitmap(screenshot,new Int32Rect(x,y,right-x,bottom-y));bitmap.Freeze();Result=bitmap;Close();
    };
+  }
+  void BuildLens(int preset){
+   var root=new Grid{Background=Brushes.Black,ClipToBounds=true,Focusable=true};Content=root;
+   root.Children.Add(new Image{Source=screenshot,Stretch=Stretch.Fill});
+   var layer=new Canvas();root.Children.Add(layer);
+   var image=new Image{Source=screenshot,Stretch=Stretch.Fill,HorizontalAlignment=HorizontalAlignment.Left,VerticalAlignment=VerticalAlignment.Top};
+   // Frost only the rim; the central magnified text remains sharp.
+   var glass=new Grid{Width=340,Height=220,Clip=new RectangleGeometry(new Rect(0,0,340,220),22,22),IsHitTestVisible=false};
+   var frostImage=new Image{Source=screenshot,Stretch=Stretch.Fill,HorizontalAlignment=HorizontalAlignment.Left,VerticalAlignment=VerticalAlignment.Top,Effect=new System.Windows.Media.Effects.BlurEffect{Radius=14}};
+   glass.Children.Add(frostImage);
+   var wash=new Border{Background=new LinearGradientBrush(Color.FromArgb(100,255,255,255),Color.FromArgb(40,225,239,255),45)};glass.Children.Add(wash);
+   var clear=new Canvas{ClipToBounds=true};clear.Children.Add(image);glass.Children.Add(clear);
+   var outline=new Border{Width=340,Height=220,CornerRadius=new CornerRadius(22),BorderBrush=new LinearGradientBrush(Color.FromArgb(235,255,255,255),Color.FromArgb(80,255,255,255),90),BorderThickness=new Thickness(1.5),IsHitTestVisible=false};
+   var shadow=new Border{Width=340,Height=220,CornerRadius=new CornerRadius(22),Background=new SolidColorBrush(Color.FromArgb(35,255,255,255)),IsHitTestVisible=false,Effect=new System.Windows.Media.Effects.DropShadowEffect{Color=Colors.Black,BlurRadius=24,ShadowDepth=5,Opacity=0.22}};
+   layer.Children.Add(shadow);layer.Children.Add(glass);layer.Children.Add(outline);
+   var hint=new TextBlock{Foreground=Brushes.White,FontSize=14};
+   var tip=new Border{Child=hint,Background=new SolidColorBrush(Color.FromArgb(230,24,33,49)),CornerRadius=new CornerRadius(8),Padding=new Thickness(12,8,12,8),Margin=new Thickness(16),HorizontalAlignment=HorizontalAlignment.Center,VerticalAlignment=VerticalAlignment.Top,IsHitTestVisible=false};root.Children.Add(tip);
+   double[] lensWidths={240,340,480,640,800},lensHeights={160,220,320,440,560};
+   preset=Math.Max(0,Math.Min(4,preset));
+   double factor=2;bool pinned=false;Point anchor=new Point();
+   Action update=()=>{
+    double width=Math.Min(lensWidths[preset],ActualWidth),height=Math.Min(lensHeights[preset],ActualHeight);if(width<=0||height<=0)return;
+    glass.Width=outline.Width=shadow.Width=width;glass.Height=outline.Height=shadow.Height=height;glass.Clip=new RectangleGeometry(new Rect(0,0,width,height),22,22);
+    clear.Clip=new RectangleGeometry(new Rect(10,10,Math.Max(0,width-20),Math.Max(0,height-20)),14,14);
+    double x=Math.Max(0,Math.Min(ActualWidth-width,anchor.X-width/2)),y=Math.Max(0,Math.Min(ActualHeight-height,anchor.Y-height/2));
+    Canvas.SetLeft(glass,x);Canvas.SetTop(glass,y);Canvas.SetLeft(outline,x);Canvas.SetTop(outline,y);Canvas.SetLeft(shadow,x);Canvas.SetTop(shadow,y);
+    frostImage.Width=ActualWidth;frostImage.Height=ActualHeight;frostImage.RenderTransform=new TranslateTransform(-x,-y);
+    image.Width=ActualWidth*factor;image.Height=ActualHeight*factor;
+    double tx=Math.Min(0,Math.Max(width-image.Width,width/2-anchor.X*factor)),ty=Math.Min(0,Math.Max(height-image.Height,height/2-anchor.Y*factor));
+    image.RenderTransform=new TranslateTransform(tx,ty);
+    hint.Text="局部放大 "+factor.ToString("0.0")+"× · ← → 切换尺寸 · 1–5 预设 · 滚轮调倍率 · 单击"+(pinned?"解除固定":"固定")+" · Esc 退出（屏幕快照）";
+   };
+   Loaded+=(s,e)=>{Activate();root.Focus();Keyboard.Focus(root);anchor=Mouse.GetPosition(root);update();};
+   root.MouseMove+=(s,e)=>{if(!pinned){anchor=e.GetPosition(root);update();}};
+   root.MouseLeftButtonDown+=(s,e)=>{root.Focus();pinned=!pinned;update();e.Handled=true;};
+   AddHandler(Mouse.PreviewMouseWheelEvent,new MouseWheelEventHandler((s,e)=>{factor=Math.Max(1.25,Math.Min(8,factor*Math.Pow(1.2,e.Delta/120.0)));update();e.Handled=true;}),true);
+   SizeChanged+=(s,e)=>update();PreviewKeyDown+=(s,e)=>{if(e.Key==Key.Escape){Close();e.Handled=true;}else if(e.Key==Key.Left||e.Key==Key.Right){preset=(preset+(e.Key==Key.Left?4:1))%5;update();e.Handled=true;}else if((e.Key>=Key.D1&&e.Key<=Key.D5)||(e.Key>=Key.NumPad1&&e.Key<=Key.NumPad5)){preset=e.Key>=Key.NumPad1?(int)e.Key-(int)Key.NumPad1:(int)e.Key-(int)Key.D1;update();e.Handled=true;}};
   }
   Rect Region(Point end){return new Rect(start,new Point(Math.Max(0,Math.Min(ActualWidth,end.X)),Math.Max(0,Math.Min(ActualHeight,end.Y))));}
   void ZoomAt(Point anchor,double requested){
@@ -894,7 +946,7 @@ namespace ClassInk {
   void ShowChoice(ChoiceGroup group){if(flyout!=null&&flyout.IsOpen&&flyout.PlacementTarget==group.Main)return;OpenFlyout(group.Main,ChoicePanel(group));}
   void AddChoice(string[] icons,string[] names,Action<int> apply,bool immediate,int initial=0){
    var group=new ChoiceGroup{Icons=icons,Names=names,Apply=apply,Immediate=immediate,Index=initial,Desk=this};choices.Add(group);
-   bool actionGroup=icons[0]=="zoom"||icons[0]=="save";
+   bool actionGroup=icons[0]=="zoom"||icons[0]=="save"||icons[0]=="lens-small";
    bool wheelSelected=false;
    var row=new Grid();group.Main=Button("",()=>{if(actionGroup&&wheelSelected){wheelSelected=false;group.Apply(group.Index);}else ShowChoice(group);});group.Main.MinWidth=30;row.Children.Add(group.Main);
    row.Children.Add(new TextBlock{Text="›",FontSize=10,Foreground=B("#94A3B8"),HorizontalAlignment=HorizontalAlignment.Right,VerticalAlignment=VerticalAlignment.Bottom,Margin=new Thickness(0,0,3,4),IsHitTestVisible=false});
@@ -962,6 +1014,7 @@ namespace ClassInk {
    visibilityButton=Button("",ToggleAnnotations);panel.Children.Add(visibilityButton);
    AddIcon("trash","一键清空 · 可撤销",ClearBoard);
    AddChoice(new[]{"zoom","image"},new[]{"屏幕缩放 · Ctrl+1","框选截图并贴到板书"},i=>OpenScreenView(i==1),false);
+   AddChoice(new[]{"lens-small","lens-medium","lens-large","lens-xl","lens-xxl"},new[]{"小框 · 240 × 160","中框 · 340 × 220","大框 · 480 × 320","特大框 · 640 × 440","超大框 · 800 × 560"},i=>{lensPreset=i;OpenScreenView(false,true);},false,lensPreset);
    Action[] fileActions={Save,Open,Export,ExportBoard,ExportLessonPdf};
    AddChoice(new[]{"save","open","export","image","pdf"},new[]{"保存课程","打开课程","导出屏幕 PNG","导出当前板书 PNG","导出整节课 PDF"},i=>fileActions[i](),false);
    Separator();
@@ -1441,9 +1494,10 @@ namespace ClassInk {
    RememberSavedLesson();
    CloseNotice();Refresh(history[index]);
   }
+  int lensPreset=2;
   ScreenView screenView;
   bool capturingScreen;
-  async void OpenScreenView(bool crop){
+  async void OpenScreenView(bool crop,bool local=false){
    if(screenView!=null){if(!crop)screenView.Close();return;}
    if(capturingScreen)return;
    capturingScreen=true;
@@ -1462,7 +1516,7 @@ namespace ClassInk {
       screenshot=BitmapFrame.Create(stream,BitmapCreateOptions.None,BitmapCacheOption.OnLoad);screenshot.Freeze();
      }
     }
-    var view=new ScreenView(screenshot,board,crop);screenView=view;
+    var view=new ScreenView(screenshot,board,crop,local,lensPreset);screenView=view;
     view.ShowDialog();pasted=view.Result;
    }catch(Exception error){MessageBox.Show(error.Message,"屏幕工具");}
    finally{screenView=null;board.Show();Show();if(timerVisible&&timerWindow!=null)timerWindow.Show();capturingScreen=false;}

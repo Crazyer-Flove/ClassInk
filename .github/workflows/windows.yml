@@ -24,15 +24,15 @@ jobs:
         with:
           name: ClassInk-Windows
           path: dist/ClassInk.exe
-      - name: Publish v1.5.0
+      - name: Publish v1.6.0
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release view v1.5.0 --repo $env:GITHUB_REPOSITORY
+          gh release view v1.6.0 --repo $env:GITHUB_REPOSITORY
           if ($LASTEXITCODE -ne 0) {
-            gh release create v1.5.0 --target $env:GITHUB_SHA --title 'ClassInk v1.5.0 · 幸运大转盘' --notes 'Windows 新增明亮六色抽奖转盘、自定义奖项、加速音效及最终随机跳转。macOS 预览版不包含抽奖功能。' --repo $env:GITHUB_REPOSITORY
+            gh release create v1.6.0 --target $env:GITHUB_SHA --title 'ClassInk v1.6.0 · 局部毛玻璃放大镜' --notes 'Windows 修复缩放平移与滚轮缩放，新增独立毛玻璃放大镜、五档尺寸和左右切换，默认第 3 档。macOS 预览版保持不变。' --repo $env:GITHUB_REPOSITORY
             if ($LASTEXITCODE -ne 0) { throw 'Release creation failed' }
           }
-          gh release upload v1.5.0 ./dist/ClassInk.exe --clobber --repo $env:GITHUB_REPOSITORY
+          gh release upload v1.6.0 ./dist/ClassInk.exe --clobber --repo $env:GITHUB_REPOSITORY
           if ($LASTEXITCODE -ne 0) { throw 'Release upload failed' }
