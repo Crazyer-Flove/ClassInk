@@ -1,5 +1,8 @@
 name: macOS preview installer
 on:
+  push:
+    branches: [main]
+    paths: ['macos/**', '.github/workflows/macos.yml']
   workflow_dispatch:
   release:
     types: [published]
@@ -16,7 +19,6 @@ jobs:
           name: ClassInk-macOS
           path: dist/ClassInk-macOS.dmg
   release:
-    if: github.event_name == 'release'
     needs: package
     runs-on: ubuntu-latest
     permissions:
@@ -25,7 +27,18 @@ jobs:
       - uses: actions/download-artifact@v4
         with:
           name: ClassInk-macOS
-      - run: gh release upload "$TAG" ClassInk-macOS.dmg --repo "$GITHUB_REPOSITORY"
+      - shell: bash
+        run: |
+          set -euo pipefail
+          for attempt in {1..30}; do
+            if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+              gh release upload "$TAG" ClassInk-macOS.dmg --clobber --repo "$GITHUB_REPOSITORY"
+              exit 0
+            fi
+            sleep 10
+          done
+          echo "Release $TAG not found" >&2
+          exit 1
         env:
           GH_TOKEN: ${{ github.token }}
-          TAG: ${{ github.event.release.tag_name }}
+          TAG: ${{ github.event.release.tag_name || 'v1.7.1' }}

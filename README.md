@@ -373,3 +373,8 @@ $check.ExitCode
 
 按 **Alt + 1** 进入框选截图，左键拖出区域，松开后自动贴到当前板书页，可选择、移动和缩放；Esc 取消。原 **Ctrl + Alt + C** 入口保留。**Ctrl + 1** 仍为全屏缩放，不受影响。设置 → 快捷键中可检查 Alt + 1 是否注册成功。
 
+
+### macOS v1.7.1 预览安装包
+
+[下载 macOS 通用 DMG](https://github.com/Crazyer-Flove/ClassInk/releases/download/v1.7.1/ClassInk-macOS.dmg)。本次更新安装包版本并重新构建 Apple Silicon / Intel 通用包，功能仍为 macOS 预览版，不包含 Windows 专有的代码编辑器和便笺。
+
