@@ -11,7 +11,7 @@ using Microsoft.Win32;
 namespace ClassInk {
  public sealed class CodeBlockWindow : Window {
   bool light,composing;
-  readonly TextBox editor=new TextBox{AcceptsReturn=true,AcceptsTab=true,FontFamily=new FontFamily("Consolas"),FontSize=16,HorizontalScrollBarVisibility=ScrollBarVisibility.Auto,VerticalScrollBarVisibility=ScrollBarVisibility.Auto,TextWrapping=TextWrapping.NoWrap,Padding=new Thickness(12),BorderThickness=new Thickness(0),Text="// Hello, ClassInk!\nfunction greet(name) {\n  return \"Hello, \" + name;\n}"};
+  readonly TextBox editor=new TextBox{AcceptsReturn=true,AcceptsTab=true,FontFamily=new FontFamily("Consolas"),FontSize=16,HorizontalScrollBarVisibility=ScrollBarVisibility.Auto,VerticalScrollBarVisibility=ScrollBarVisibility.Auto,TextWrapping=TextWrapping.NoWrap,Padding=new Thickness(12),BorderThickness=new Thickness(0),Text="#include <bits/stdc++.h>\nusing namespace std;\nint main(){\n\n\n}"};
   readonly ComboBox language=new ComboBox{Width=150,Margin=new Thickness(0,0,12,0)};
   readonly TextBlock code=new TextBlock{FontFamily=new FontFamily("Consolas"),FontSize=16,Foreground=Brushes.White};
   readonly Border card=new Border{Background=new SolidColorBrush(Color.FromRgb(24,30,42)),Padding=new Thickness(24),CornerRadius=new CornerRadius(12),HorizontalAlignment=HorizontalAlignment.Left,VerticalAlignment=VerticalAlignment.Top};
@@ -21,7 +21,7 @@ namespace ClassInk {
    Title="课堂笔 · 代码块";Width=960;Height=640;MinWidth=640;MinHeight=420;WindowStartupLocation=WindowStartupLocation.CenterScreen;Background=ColorBrush("#181E2A");
    var root=new DockPanel{Margin=new Thickness(24)};Content=root;
    var bar=new StackPanel{Orientation=Orientation.Horizontal,Margin=new Thickness(0,0,0,24)};var dots=EditorChrome.Dots();dots.Margin=new Thickness(0,0,24,0);dots.VerticalAlignment=VerticalAlignment.Center;bar.Children.Add(dots);DockPanel.SetDock(bar,Dock.Top);root.Children.Add(bar);
-   foreach(string name in new[]{"JavaScript","TypeScript","Python","C#","C++","Java","JSON","HTML","CSS","SQL","纯文本"})language.Items.Add(name);language.SelectedIndex=0;bar.Children.Add(language);
+   foreach(string name in new[]{"JavaScript","TypeScript","Python","C#","C++","Java","JSON","HTML","CSS","SQL","纯文本"})language.Items.Add(name);language.SelectedItem="C++";bar.Children.Add(language);
    var export=new Button{Content="导出 PNG",Padding=new Thickness(16,6,16,6)};bar.Children.Add(export);export.Click+=(s,e)=>Export();
    EditorChrome.Style(export);export.ToolTip="导出完整代码图片";
    var theme=new Button{Content="◐",ToolTip="切换黑白风格",Padding=new Thickness(12,6,12,6),Margin=new Thickness(10,0,0,0)};EditorChrome.Style(theme);bar.Children.Add(theme);

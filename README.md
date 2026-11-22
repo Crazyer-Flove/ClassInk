@@ -1,10 +1,10 @@
 ﻿# 课堂笔 ClassInk
 
-**Windows v1.7.0 · 屏幕标注、板书、放大镜与课堂创作工具**
+**Windows v1.7.1 · 屏幕标注、板书、放大镜与课堂创作工具**
 
 把课件重点直接画在屏幕上，用多页白板整理思路，用便笺和代码卡片制作课堂素材，再用倒计时和抽奖组织互动。
 
-[下载最终版 ClassInk.exe](https://github.com/Crazyer-Flove/ClassInk/releases/latest/download/ClassInk.exe) · [版本说明](https://github.com/Crazyer-Flove/ClassInk/releases/tag/v1.7.0) · [更新日志](CHANGELOG.md) · [MIT 许可证](LICENSE)
+[下载最终版 ClassInk.exe](https://github.com/Crazyer-Flove/ClassInk/releases/latest/download/ClassInk.exe) · [版本说明](https://github.com/Crazyer-Flove/ClassInk/releases/tag/v1.7.1) · [更新日志](CHANGELOG.md) · [MIT 许可证](LICENSE)
 
 ## 目录
 
@@ -53,7 +53,7 @@
 
 ## 界面与功能展示
 
-以下为 **v1.7.0 程序控件实际渲染的展示图**，示例内容仅用于演示。图片不包含操作系统标题栏；系统 DPI、字体和窗口尺寸会影响实际外观。
+以下为 **v1.7.1 程序控件实际渲染的展示图**，示例内容仅用于演示。图片不包含操作系统标题栏；系统 DPI、字体和窗口尺寸会影响实际外观。
 
 ### 单栏代码块：黑色风格
 
@@ -122,6 +122,19 @@ TXT 保存纯文字与换行，重新打开不会恢复颜色、字号和对齐�
 从课堂工具组选择 `</>` 图标。顶部依次提供红、绿、黄圆点、语言选择、导出 PNG 和黑白主题切换。三色圆点是装饰，不是窗口关闭按钮。右侧和底部使用与代码区一致的背景。
 
 直接在代码区输入，普通输入立即刷新颜色；输入法组合阶段使用可见文字，确认后更新高亮。Tab 插入四个空格，Enter 换行。Ctrl + 滚轮只放大或缩小编辑显示，导出仍使用原代码字号。
+
+### 默认 C++ 模板
+
+每次新建代码窗口默认选择 C++，初始内容如下；仍可从顶部切换其他语言。
+
+```cpp
+#include <bits/stdc++.h>
+using namespace std;
+int main(){
+
+
+}
+```
 
 ### 支持的语言
 

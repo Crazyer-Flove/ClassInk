@@ -1,4 +1,4 @@
-name: Windows release
+﻿name: Windows release
 on:
   push:
     branches: [main]
@@ -24,16 +24,16 @@ jobs:
         with:
           name: ClassInk-Windows
           path: dist/ClassInk.exe
-      - name: Publish v1.7.0
+      - name: Publish v1.7.1
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release view v1.7.0 --repo $env:GITHUB_REPOSITORY
+          gh release view v1.7.1 --repo $env:GITHUB_REPOSITORY
           if ($LASTEXITCODE -ne 0) {
-            gh release create v1.7.0 --target $env:GITHUB_SHA --title 'ClassInk v1.7.0 · 课堂创作工具' --notes '新增文本便笺、单栏代码编辑与图片导出；便笺、代码块和抽奖合并工具组。支持 Ctrl+滚轮缩放显示、黑白代码主题。详细图文说明见 README，macOS 预览版保持不变。' --repo $env:GITHUB_REPOSITORY
+            gh release create v1.7.1 --target $env:GITHUB_SHA --title 'ClassInk v1.7.1 · C++ 默认模板' --notes '代码块默认使用 C++ 和标准课堂模板，更新图文 README。保留 Alt+1 截图贴图、便笺、黑白代码卡片和 Ctrl+滚轮缩放。' --repo $env:GITHUB_REPOSITORY
             if ($LASTEXITCODE -ne 0) { throw 'Release creation failed' }
           }
-          gh release upload v1.7.0 ./dist/ClassInk.exe --clobber --repo $env:GITHUB_REPOSITORY
+          gh release upload v1.7.1 ./dist/ClassInk.exe --clobber --repo $env:GITHUB_REPOSITORY
           if ($LASTEXITCODE -ne 0) { throw 'Release upload failed' }
 
