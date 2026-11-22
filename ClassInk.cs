@@ -19,8 +19,8 @@ using Microsoft.Win32;
 
 [assembly: System.Reflection.AssemblyTitle("课堂笔 ClassInk")]
 [assembly: System.Reflection.AssemblyProduct("ClassInk")]
-[assembly: System.Reflection.AssemblyVersion("1.6.0.0")]
-[assembly: System.Reflection.AssemblyFileVersion("1.6.0.0")]
+[assembly: System.Reflection.AssemblyVersion("1.7.0.0")]
+[assembly: System.Reflection.AssemblyFileVersion("1.7.0.0")]
 
 namespace ClassInk {
  public sealed class ToolIcon : FrameworkElement {
@@ -69,6 +69,9 @@ namespace ClassInk {
      double frameWidth=name=="lens-small"?10:name=="lens-medium"?12:name=="lens-large"?14:name=="lens-xl"?16:18;
      dc.DrawRoundedRectangle(null,new Pen(brush,1.5),new Rect(10-frameWidth/2,10-frameWidth/3,frameWidth,frameWidth*2/3),2,2);
      dc.DrawLine(new Pen(brush,1.3),new Point(7,10),new Point(13,10));dc.DrawLine(new Pen(brush,1.3),new Point(10,7),new Point(10,13));return;
+    case "lottery":path="M18,10 A8,8 0 1 1 2,10 A8,8 0 1 1 18,10 M10,2 L10,18 M2,10 L18,10 M4,4 L16,16 M4,16 L16,4";break;
+    case "note":path="M4,2 L13,2 17,6 17,18 4,18 Z M13,2 L13,6 17,6 M7,9 L14,9 M7,12 L14,12 M7,15 L11,15";break;
+    case "code":path="M7,5 L2,10 7,15 M13,5 L18,10 13,15 M11,3 L9,17";break;
     case "lens":path="M3,3 L17,3 Q19,3 19,5 L19,15 Q19,17 17,17 L3,17 Q1,17 1,15 L1,5 Q1,3 3,3 M6,10 L14,10 M10,6 L10,14";break;
     case "zoom":path="M14,8 A6,6 0 1 1 2,8 A6,6 0 1 1 14,8 M12,12 L18,18 M5,8 L11,8 M8,5 L8,11";break;
     case "pdf":path="M5,2 L12,2 16,6 16,18 5,18 Z M12,2 L12,6 16,6 M8,10 L13,10 M8,14 L13,14";break;
@@ -773,7 +776,8 @@ namespace ClassInk {
    new Shortcut(0x4E,"N","新建板书页",NewPage),
    new Shortcut(0x5A,"Z","撤销",()=>Travel(-1)),
    new Shortcut(0x59,"Y","重做",()=>Travel(1)),
-   new Shortcut(0x4B,"K","打开计时器",ShowClock)
+   new Shortcut(0x4B,"K","打开计时器",ShowClock),
+   new Shortcut(0x31,"1","截图并贴到板书",()=>OpenScreenView(true))
   };}
   void ShowShortcuts(){
    if(flyout!=null)flyout.IsOpen=false;
@@ -781,10 +785,10 @@ namespace ClassInk {
    rows.Children.Add(new TextBlock{Text="课堂笔快捷键",FontSize=19,FontWeight=FontWeights.SemiBold,Foreground=UiInk,Margin=new Thickness(0,0,0,10)});
    for(int i=0;i<shortcuts.Length;i++){
     var item=shortcuts[i];
-    string keys=(i==4?"Ctrl + ":"Ctrl + Alt + ")+item.Label;
+    string keys=(i==4?"Ctrl + ":i==shortcuts.Length-1?"Alt + ":"Ctrl + Alt + ")+item.Label;
     rows.Children.Add(new TextBlock{Text=keys+"    "+item.Description+(registeredShortcuts.Contains(i+1)?"":"  （未注册）"),Foreground=UiInk,Margin=new Thickness(0,3,0,3)});
    }
-   rows.Children.Add(new TextBlock{Text="缩放中：B 蓝笔 · R 红笔 · G 绿笔 · E 清空临时笔迹\nCtrl+Z 撤销 · Esc 退出缩放",Foreground=ActiveInk,Margin=new Thickness(0,12,0,0)});
+   rows.Children.Add(new TextBlock{Text="缩放中：B 蓝笔 · R 红笔 · G 绿笔 · E 清空临时笔迹\nCtrl+Z 撤销 · Esc 退出缩放\n右键 / 中键 / 空格+左键：拖动平移\n\n局部放大镜：← / → 或 1–5 切换尺寸\n滚轮调倍率 · 单击固定 / 解除固定 · Esc 退出\n\n文本便笺 / 代码块：Ctrl + 滚轮缩放显示\n工具组：左右键 / 悬停滚轮切换\n板书文字：Ctrl+Enter 提交 · Esc 取消",Foreground=ActiveInk,Margin=new Thickness(0,12,0,0)});
    var dialog=new Window{Title="快捷键说明",Owner=this,ShowInTaskbar=false,Topmost=true,Width=470,Height=Math.Min(640,SystemParameters.WorkArea.Height-50),WindowStartupLocation=WindowStartupLocation.CenterScreen,Background=B(themeSurfaces[themeIndex]),Content=new ScrollViewer{Content=rows,VerticalScrollBarVisibility=ScrollBarVisibility.Auto}};
    dialog.PreviewKeyDown+=(s,e)=>{if(e.Key==Key.Escape)dialog.Close();};dialog.ShowDialog();
   }
@@ -946,7 +950,7 @@ namespace ClassInk {
   void ShowChoice(ChoiceGroup group){if(flyout!=null&&flyout.IsOpen&&flyout.PlacementTarget==group.Main)return;OpenFlyout(group.Main,ChoicePanel(group));}
   void AddChoice(string[] icons,string[] names,Action<int> apply,bool immediate,int initial=0){
    var group=new ChoiceGroup{Icons=icons,Names=names,Apply=apply,Immediate=immediate,Index=initial,Desk=this};choices.Add(group);
-   bool actionGroup=icons[0]=="zoom"||icons[0]=="save"||icons[0]=="lens-small";
+   bool actionGroup=icons[0]=="zoom"||icons[0]=="save"||icons[0]=="lens-small"||icons[0]=="note";
    bool wheelSelected=false;
    var row=new Grid();group.Main=Button("",()=>{if(actionGroup&&wheelSelected){wheelSelected=false;group.Apply(group.Index);}else ShowChoice(group);});group.Main.MinWidth=30;row.Children.Add(group.Main);
    row.Children.Add(new TextBlock{Text="›",FontSize=10,Foreground=B("#94A3B8"),HorizontalAlignment=HorizontalAlignment.Right,VerticalAlignment=VerticalAlignment.Bottom,Margin=new Thickness(0,0,3,4),IsHitTestVisible=false});
@@ -1012,14 +1016,17 @@ namespace ClassInk {
    var pageFace=new StackPanel();pageFace.Children.Add(new ToolIcon("pages"){HorizontalAlignment=HorizontalAlignment.Center});pageFace.Children.Add(pageNumber);
    pageButton=Button("",ShowPages);pageButton.Content=pageFace;pageButton.Height=42;panel.Children.Add(pageButton);
    visibilityButton=Button("",ToggleAnnotations);panel.Children.Add(visibilityButton);
+   Action[] classroomTools={ShowTextNote,ShowCodeBlock,ShowLottery};
+   AddChoice(new[]{"note","code","lottery"},new[]{"文本便笺","代码块","抽奖大转盘"},i=>classroomTools[i](),false);
+
    AddIcon("trash","一键清空 · 可撤销",ClearBoard);
-   AddChoice(new[]{"zoom","image"},new[]{"屏幕缩放 · Ctrl+1","框选截图并贴到板书"},i=>OpenScreenView(i==1),false);
+   AddChoice(new[]{"zoom","image"},new[]{"屏幕缩放 · Ctrl+1","框选截图并贴到板书 · Alt+1"},i=>OpenScreenView(i==1),false);
    AddChoice(new[]{"lens-small","lens-medium","lens-large","lens-xl","lens-xxl"},new[]{"小框 · 240 × 160","中框 · 340 × 220","大框 · 480 × 320","特大框 · 640 × 440","超大框 · 800 × 560"},i=>{lensPreset=i;OpenScreenView(false,true);},false,lensPreset);
    Action[] fileActions={Save,Open,Export,ExportBoard,ExportLessonPdf};
    AddChoice(new[]{"save","open","export","image","pdf"},new[]{"保存课程","打开课程","导出屏幕 PNG","导出当前板书 PNG","导出整节课 PDF"},i=>fileActions[i](),false);
    Separator();
    clockText=new TextBlock {Text="00:00",FontFamily=new FontFamily("Consolas"),FontSize=10,HorizontalAlignment=HorizontalAlignment.Center};
-   var lotteryButton=Button("",ShowLottery);lotteryButton.Content=new TextBlock{Text="☸",FontSize=23};lotteryButton.ToolTip="抽奖大转盘";panel.Children.Add(lotteryButton);
+
    var clockFace=new StackPanel {Orientation=Orientation.Vertical};clockFace.Children.Add(new ToolIcon("clock"){HorizontalAlignment=HorizontalAlignment.Center});clockFace.Children.Add(clockText);
    clockButton=Button("",ShowClock);clockButton.Content=clockFace;clockButton.ToolTip="左键打开计时器 · 右键选择预设";clockButton.Height=44;panel.Children.Add(clockButton);
    clockButton.MouseRightButtonUp+=(s,e)=>{ShowPresets();e.Handled=true;};
@@ -1038,7 +1045,7 @@ namespace ClassInk {
     board.Changed=Commit;Refresh(initial);
     var h=new WindowInteropHelper(this).Handle;HwndSource.FromHwnd(h).AddHook(Hook);
     shortcuts=CreateShortcuts();
-    for(int i=0;i<shortcuts.Length;i++)if(Native.RegisterHotKey(h,i+1,i==4?0x4002u:0x4003u,shortcuts[i].Key))registeredShortcuts.Add(i+1);
+    for(int i=0;i<shortcuts.Length;i++)if(Native.RegisterHotKey(h,i+1,i==4?0x4002u:i==shortcuts.Length-1?0x4001u:0x4003u,shortcuts[i].Key))registeredShortcuts.Add(i+1);
     if(!registeredShortcuts.Contains(5))ShowNotice("Ctrl+1 已被占用，可从工具栏启动缩放");
     Activate();
    };
@@ -1208,13 +1215,13 @@ namespace ClassInk {
    if(lottery!=null){lottery.Activate();return;}
    var w=new Window{Title="抽奖大转盘",Width=440,Height=650,Background=Brushes.White,FontFamily=new FontFamily("Microsoft YaHei UI"),Topmost=true,WindowStartupLocation=WindowStartupLocation.CenterScreen};lottery=w;
    var root=new StackPanel{Margin=new Thickness(24)};w.Content=root;
-   root.Children.Add(new TextBlock{Text="幸运大转盘",FontSize=26,FontWeight=FontWeights.Bold,HorizontalAlignment=HorizontalAlignment.Center,Margin=new Thickness(0,0,0,18)});
+   root.Children.Add(new TextBlock{Text="幸运转盘",FontSize=22,FontWeight=FontWeights.Bold,HorizontalAlignment=HorizontalAlignment.Center,Margin=new Thickness(0,0,0,18)});
    var input=new TextBox{Text="一等奖\n二等奖\n三等奖\n谢谢参与",AcceptsReturn=true,Height=120,VerticalScrollBarVisibility=ScrollBarVisibility.Auto};var editor=new Expander{Header="编辑奖项 · 每行一项",Content=input,Margin=new Thickness(0,0,0,10)};root.Children.Add(editor);
    root.Children.Add(new TextBlock{Text="▼",FontSize=26,Foreground=B("#FF526B"),HorizontalAlignment=HorizontalAlignment.Center});
    var canvas=new Canvas{Width=300,Height=300};root.Children.Add(canvas);
    var rotate=new RotateTransform(0,150,150);canvas.RenderTransform=rotate;
-   var result=new TextBlock{Text="准备抽奖",FontSize=24,FontWeight=FontWeights.Bold,Foreground=B("#243047"),TextAlignment=TextAlignment.Center,Margin=new Thickness(0,16,0,16),TextWrapping=TextWrapping.Wrap};root.Children.Add(result);
-   var start=new Button{Content="开始抽奖",Height=46,Background=B("#FF526B"),Foreground=Brushes.White,BorderThickness=new Thickness(0),FontSize=17,FontWeight=FontWeights.Bold};root.Children.Add(start);
+   var result=new TextBlock{Text="准备抽奖",FontSize=20,FontWeight=FontWeights.SemiBold,Foreground=B("#243047"),TextAlignment=TextAlignment.Center,Margin=new Thickness(0,16,0,16),TextWrapping=TextWrapping.Wrap};root.Children.Add(result);
+   var start=new Button{Content="开始抽奖",Height=46,Background=B("#FF526B"),Foreground=Brushes.White,BorderThickness=new Thickness(0),FontSize=17,FontWeight=FontWeights.Bold};EditorChrome.Style(start);start.Background=B("#FF526B");start.Foreground=Brushes.White;root.Children.Add(start);
    string[] items=null;Action draw=()=>{
     items=input.Text.Split(new[]{'\r','\n'},StringSplitOptions.RemoveEmptyEntries).Select(x=>x.Trim()).Where(x=>x.Length>0).ToArray();canvas.Children.Clear();rotate.Angle=0;
     start.IsEnabled=items.Length>=2&&items.Length<=24&&items.All(x=>x.Length<=30);if(!start.IsEnabled){result.Text="需 2–24 项，每项最多 30 字";return;}result.Text="准备抽奖";
@@ -1494,6 +1501,10 @@ namespace ClassInk {
    RememberSavedLesson();
    CloseNotice();Refresh(history[index]);
   }
+  TextNoteWindow textNote;
+  void ShowTextNote(){if(textNote==null){textNote=new TextNoteWindow();textNote.Closed+=(s,e)=>textNote=null;}textNote.Show();textNote.Activate();}
+  CodeBlockWindow codeWindow;
+  void ShowCodeBlock(){if(codeWindow==null){codeWindow=new CodeBlockWindow();codeWindow.Closed+=(s,e)=>codeWindow=null;}codeWindow.Show();codeWindow.Activate();}
   int lensPreset=2;
   ScreenView screenView;
   bool capturingScreen;
